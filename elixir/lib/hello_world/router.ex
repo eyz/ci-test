@@ -7,7 +7,7 @@ defmodule HelloWorld.Router do
 
   get "/" do
     Logger.info("GET / - Hello World request - Sent 200")
-    send_resp(conn, 200, "Hello, World!")
+    send_resp(conn, 200, "Hello, World!\n")
   end
 
   match _ do

@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.24.4-alpine3.22 AS builder
+FROM golang:1.24.4-alpine3.22 AS build
 
 # Set working directory
 WORKDIR /app
@@ -11,10 +11,10 @@ COPY go/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-extldflags "-static"' -o server main.go
 
 # Final stage - scratch image
-FROM scratch
+FROM scratch AS final
 
-# Copy the binary from builder stage
-COPY --from=builder /app/server /server
+# Copy the binary from build stage
+COPY --from=build /app/server /server
 
 # Run as unprivileged user (uid 65534)
 USER 65534:65534

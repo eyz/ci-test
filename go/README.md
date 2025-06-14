@@ -6,10 +6,10 @@ A simple HTTP 1.1 server written in Go that responds with "Hello, World!" on por
 
 - HTTP 1.1 server listening on port 8080
 - Logs server startup and each HTTP request
-- Multi-stage Docker build with Alpine Linux 3.22
+- Multi-stage Docker build with Alpine Linux
 - Statically compiled binary
-- Runs as unprivileged user (nobody) for security
-- Minimal scratch-based final image
+- Runs as unprivileged user for security
+- **Ultra-minimal deployment**: Runs on scratch image with no Linux distribution in the final layer
 
 ## Local Development
 
@@ -28,17 +28,21 @@ CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-extldflags "-static"' -o server 
 ./server
 ```
 
+The binary is statically linked and contains no external dependencies, allowing it to run on a scratch Docker image with no Linux distribution in the final layer.
+
 ### Test the server
 
 ```bash
 curl http://localhost:8080
 ```
 
+Expected response: `Hello, World!` (with newline)
+
 ## Docker
 
 ### Build the Docker image
 
-From the parent directory (test-services):
+From the parent directory (ci-test):
 
 ```bash
 docker build -f go/Dockerfile -t hello-world-go .
@@ -55,15 +59,6 @@ docker run -p 8080:8080 hello-world-go
 ```bash
 curl http://localhost:8080
 ```
-
-## Docker Image Details
-
-- **Build Image**: golang:1.23-alpine3.22
-- **Final Image**: scratch (minimal size)
-- **Go Version**: 1.23 (latest stable)
-- **Security**: Runs as nobody user (unprivileged)
-- **Binary**: Statically compiled (no dependencies)
-- **Size**: Ultra-minimal with scratch base
 
 ## Logs
 

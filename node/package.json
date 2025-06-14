@@ -1,0 +1,13 @@
+{
+  "name": "koa-server",
+  "version": "1.0.0",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "koa": "^3.0.0"
+  },
+  "packageManager": "pnpm@10.12.1"
+}

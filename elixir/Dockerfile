@@ -28,7 +28,7 @@ RUN mix compile && \
     mix release
 
 # Final stage - minimal runtime
-FROM alpine:3.22.0
+FROM alpine:3.22.0 AS final
 
 # Install runtime dependencies
 RUN apk add --no-cache \

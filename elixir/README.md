@@ -19,7 +19,7 @@ mix run --no-halt
 Build and run the containerized version:
 
 ```bash
-# Build the Docker image (from parent directory)
+# Build the Docker image (from parent directory ci-test)
 docker build -f elixir/Dockerfile -t hello-world-elixir .
 
 # Run the container
@@ -34,12 +34,12 @@ Once running, test the server:
 curl http://localhost:8080
 ```
 
-Should return: `Hello, World!`
+Should return: `Hello, World!` (with trailing newline)
 
 ## Features
 
 - Minimal HTTP 1.1 server using Plug and Cowboy
 - Multi-stage Docker build with Alpine Linux
-- Runs as unprivileged user (uid: 1001)
+- Runs as unprivileged user for security
 - Production-ready Elixir release
 - Small final image size
