@@ -1,0 +1,10 @@
+# Ignore all files in parent directory except the go folder
+/*
+!/go/
+
+# Inside go folder, ignore these
+go/.git
+go/.gitignore
+go/README.md
+go/Dockerfile
+go/.dockerignore

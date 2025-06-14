@@ -1,0 +1,10 @@
+[package]
+name = "rust-hello-world"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros"] }
+http-body-util = "0.1"
