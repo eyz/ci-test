@@ -7,70 +7,118 @@ on:
     branches: [ main, master ]
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrixInclude: ${{ steps.gen.outputs.matrixInclude }}
+    steps:
+      - id: gen
+        run: |
+          JSON=$(jq -cn '[
+            {"containerName":"elixir","dockerfilePath":"elixir/Dockerfile"},
+            {"containerName":"go","dockerfilePath":"go/Dockerfile"},
+            {"containerName":"node","dockerfilePath":"node/Dockerfile"},
+            {"containerName":"python","dockerfilePath":"python/Dockerfile"},
+            {"containerName":"rust","dockerfilePath":"rust/Dockerfile"}
+          ]')
+          echo "matrixInclude=$JSON" >> "$GITHUB_OUTPUT"
+
   build:
     runs-on: ubuntu-latest
-    
+    needs: prepare
     strategy:
       matrix:
-        subfolder: [elixir, go, node, python, rust]
-    
+        include: ${{ fromJson(needs.prepare.outputs.matrixInclude) }}
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
-    
-    - name: Build Docker image for ${{ matrix.subfolder }}
+
+    - name: Build Docker image for ${{ matrix.containerName }}
       run: |
-        docker build -t ${{ matrix.subfolder }} -f ${{ matrix.subfolder }}/Dockerfile .
-    
+        docker build -t ${{ matrix.containerName }} -f ${{ matrix.dockerfilePath }} .
+
     - name: Start container on port 8080
       run: |
-        docker run -d --name ${{ matrix.subfolder }}-container -p 8080:8080 ${{ matrix.subfolder }}
-    
+        docker run -d --name ${{ matrix.containerName }}-container -p 8080:8080 ${{ matrix.containerName }}
+
     - name: Wait for container to be ready
       run: |
         timeout 30 bash -c 'until curl -f http://localhost:8080/ > /dev/null 2>&1; do sleep 2; done' || true
-    
+
     - name: Test endpoint with cURL
       run: |
         # Capture both response body and status code in one request
         response=$(curl -s -w "%{http_code}" http://localhost:8080/)
-        
+
         # Parse response: last 3 characters are the status code, rest is body
         response_code="${response: -3}"
         response_body="${response%???}"
-        
+
         # Get only the first line and strip newlines to prevent markdown table formatting issues
         response_body_clean=$(echo "$response_body" | head -n 1 | tr -d '\n\r')
-        
+
         echo "HTTP response code: $response_code"
         echo "HTTP response body: $response_body_clean"
-        
-        # Create job summary
-        echo "## 🚀 Container Test Results for ${{ matrix.subfolder }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
-        echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **HTTP Status Code** | \`$response_code\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **HTTP Response Body** | \`$response_body_clean\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Endpoint** | \`http://localhost:8080/\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Container** | \`${{ matrix.subfolder }}-container\` |" >> $GITHUB_STEP_SUMMARY
-        
+
+        # Store test results in artifacts for summary job
+        mkdir -p test-results
+        echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},$response_code,$response_body_clean" > test-results/${{ matrix.containerName }}.csv
+
         if [ "$response_code" -eq 200 ]; then
-          echo "| **Test Result** | ✅ **PASSED** |" >> $GITHUB_STEP_SUMMARY
           echo "✅ Test passed: Received HTTP 200 from /"
         else
-          echo "| **Test Result** | ❌ **FAILED** |" >> $GITHUB_STEP_SUMMARY
           echo "❌ Test failed: Expected HTTP 200, got $response_code"
           exit 1
         fi
-        
-        echo "" >> $GITHUB_STEP_SUMMARY
-    
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-${{ matrix.containerName }}
+        path: test-results/
+        retention-days: 1
+
     - name: Cleanup container
       if: always()
       run: |
-        docker stop ${{ matrix.subfolder }}-container || true
-        docker rm ${{ matrix.subfolder }}-container || true
+        docker stop ${{ matrix.containerName }}-container || true
+        docker rm ${{ matrix.containerName }}-container || true
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+
+    steps:
+    - name: Download all test results
+      uses: actions/download-artifact@v4
+      with:
+        pattern: test-results-*
+        path: all-results
+        merge-multiple: true
+
+    - name: Create combined summary
+      run: |
+        echo "# 🚀 Container Test Results Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Container Name | Dockerfile Path | Status Code | Response Body | Test Result |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------------|-----------------|-------------|---------------|-------------|" >> $GITHUB_STEP_SUMMARY
+
+        for file in all-results/*.csv; do
+          if [ -f "$file" ]; then
+            IFS=',' read -r container dockerfile_path status_code response_body < "$file"
+            if [ "$status_code" -eq 200 ]; then
+              result="✅ PASSED"
+            else
+              result="❌ FAILED"
+            fi
+            echo "| **$container** | \`$dockerfile_path\` | \`$status_code\` | \`$response_body\` | $result |" >> $GITHUB_STEP_SUMMARY
+          fi
+        done
+
+        echo "" >> $GITHUB_STEP_SUMMARY
