@@ -1,5 +1,7 @@
 # CI Test Services
 
+[![Build Matrix](https://github.com/eyz/ci-test/actions/workflows/build-matrix.yml/badge.svg)](https://github.com/eyz/ci-test/actions/workflows/build-matrix.yml)
+
 A collection of simple "Hello World" HTTP servers implemented in different programming languages for testing CI/CD pipelines and containerization. Each service listens on port 8080 and provides a simple HTTP endpoint.
 
 ## Overview
@@ -54,33 +56,68 @@ Once any service is running, test it with:
 curl http://localhost:8080
 ```
 
+## CI/CD Pipeline
+
+This repository includes a comprehensive GitHub Actions workflow that automatically builds and tests all services:
+
+### Build Matrix Workflow
+
+The [`.github/workflows/build-matrix.yml`](./.github/workflows/build-matrix.yml) implements:
+
+- **🔧 Matrix Generation**: Converts a predefined list of services to a JSON build matrix
+- **🏗️ Parallel Builds**: Builds all container images simultaneously using GitHub Actions matrix strategy
+- **🧪 Automated Testing**: Tests each service by starting containers and verifying HTTP responses
+- **📊 Comprehensive Reporting**: Generates detailed test result summaries with status codes and response bodies
+- **🔄 Triggered on**: Push to `main`/`master` branches and pull requests
+
+#### Workflow Stages
+
+1. **Prepare**: Converts predefined service list into build matrix from colon-separated `containerName:dockerfilePath` pairs
+2. **Build**: Parallel execution for each service:
+   - Builds Docker image
+   - Starts container on port 8080
+   - Tests HTTP endpoint with health checks
+   - Captures response codes and bodies
+   - Uploads test results as artifacts
+3. **Summary**: Consolidates all test results into a formatted report
+
+### Viewing CI Results
+
+After each push or pull request, check the **Actions** tab to see:
+- ✅ Build status for each service
+- 📋 Detailed test results in job summaries
+- 🔍 Container logs and debugging information
+
 ## Project Structure
 
 ```
 ci-test/
-├── elixir/          # Elixir implementation using Plug + Cowboy
+├── .github/
+│   └── workflows/
+│       └── build-matrix.yml    # CI/CD pipeline configuration
+├── elixir/                     # Elixir implementation using Plug + Cowboy
 │   ├── Dockerfile
 │   ├── README.md
 │   ├── mix.exs
 │   ├── mix.lock
 │   ├── config/
 │   └── lib/
-├── go/              # Go implementation using standard library
+├── go/                         # Go implementation using standard library
 │   ├── Dockerfile
 │   ├── README.md
 │   ├── go.mod
 │   └── main.go
-├── node/            # Node.js implementation using Koa
+├── node/                       # Node.js implementation using Koa
 │   ├── Dockerfile
 │   ├── README.md
 │   ├── package.json
 │   └── server.js
-├── python/          # Python implementation using FastAPI
+├── python/                     # Python implementation using FastAPI
 │   ├── Dockerfile
 │   ├── README.md
 │   ├── main.py
 │   └── requirements.txt
-└── rust/            # Rust implementation using Hyper
+└── rust/                       # Rust implementation using Hyper
     ├── Dockerfile
     ├── README.md
     ├── Cargo.toml
@@ -97,7 +134,9 @@ All implementations include:
 - ✅ Multi-stage Docker builds
 - ✅ Security: runs as unprivileged user
 - ✅ Minimal container images
-- ✅ Production-ready configurations
+- ✅ **Matrix-based CI/CD**: GitHub Actions workflow with configurable service matrix
+- ✅ **Automated Testing**: Container health checks and endpoint validation
+- ✅ **Test Reporting**: Comprehensive status and response tracking
 
 **Ultra-minimal deployments**: Go and Rust implementations use statically linked binaries running on scratch images with no Linux distribution in the final layer.
 
@@ -106,11 +145,13 @@ All implementations include:
 This repository is ideal for:
 
 - **CI/CD Pipeline Testing**: Test build and deployment processes across multiple languages
+- **GitHub Actions Development**: Example of dynamic matrix builds and comprehensive testing
 - **Container Registry Testing**: Test image builds and pushes
 - **Load Balancer Configuration**: Test routing to different services
 - **Monitoring Setup**: Test metrics collection and health checks
 - **Security Scanning**: Test vulnerability scans across different tech stacks
 - **Infrastructure as Code**: Test deployment automation tools
+- **Multi-language Development**: Template for polyglot microservices projects
 
 ## Development
 
@@ -133,3 +174,23 @@ When adding new language implementations:
 5. Ensure the service runs as an unprivileged user
 6. Add request logging
 7. Update this root README.md
+8. **Add your service to the workflow**: Update the `SERVICES` environment variable in `.github/workflows/build-matrix.yml`
+
+### Adding New Services
+
+To add a new service to the CI pipeline:
+
+1. Create your service directory and Dockerfile
+2. Edit `.github/workflows/build-matrix.yml`
+3. Add a new line to the `SERVICES` environment variable in the format: `containerName:path/to/Dockerfile`
+
+Example:
+```yaml
+SERVICES: |
+  elixir:elixir/Dockerfile
+  go:go/Dockerfile
+  node:node/Dockerfile
+  python:python/Dockerfile
+  rust:rust/Dockerfile
+  java:java/Dockerfile  # <-- Add your new service here
+```
