@@ -13,14 +13,14 @@ jobs:
       matrixInclude: ${{ steps.gen.outputs.matrixInclude }}
     steps:
       - id: gen
+        env:
+          SERVICES: |
+            elixir:elixir/Dockerfile
+            go:go/Dockerfile
+            node:node/Dockerfile
+            python:python/Dockerfile
+            rust:rust/Dockerfile
         run: |
-          # Define the services as a multi-line string
-          SERVICES="elixir:elixir/Dockerfile
-          go:go/Dockerfile
-          node:node/Dockerfile
-          python:python/Dockerfile
-          rust:rust/Dockerfile"
-          
           # Convert the services to JSON array
           # jq pipeline explanation:
           # 1. -R -s: Read input as raw strings and treat as single string
