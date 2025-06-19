@@ -20,9 +20,12 @@ jobs:
           node:node/Dockerfile
           python:python/Dockerfile
           rust:rust/Dockerfile"
+
+          echo "$SERVICES"
           
           # Convert the services to JSON array
           JSON=$(echo "$SERVICES" | jq -R -s 'split("\n") | map(select(length > 0)) | map(split(":")) | map({"containerName": .[0], "dockerfilePath": .[1]})')
+          echo "$JSON"
           echo "matrixInclude=$JSON" >> "$GITHUB_OUTPUT"
 
   build:
