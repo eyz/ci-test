@@ -13,15 +13,15 @@ jobs:
       matrixInclude: ${{ steps.gen.outputs.matrixInclude }}
     steps:
       - id: gen
-        env:
-          SERVICES: |
-            elixir:elixir/Dockerfile
-            go:go/Dockerfile
-            node:node/Dockerfile
-            python:python/Dockerfile
-            rust:rust/Dockerfile
         run: |
-          # Convert the services environment variable to JSON array
+          # Define the services as a multi-line string
+          SERVICES="elixir:elixir/Dockerfile
+          go:go/Dockerfile
+          node:node/Dockerfile
+          python:python/Dockerfile
+          rust:rust/Dockerfile"
+          
+          # Convert the services to JSON array
           JSON=$(echo "$SERVICES" | jq -R -s 'split("\n") | map(select(length > 0)) | map(split(":")) | map({"containerName": .[0], "dockerfilePath": .[1]})')
           echo "matrixInclude=$JSON" >> "$GITHUB_OUTPUT"
 
