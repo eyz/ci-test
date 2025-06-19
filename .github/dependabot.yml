@@ -1,0 +1,134 @@
+# GitHub Dependabot configuration for multi-language CI test repository
+# This configuration enables daily dependency scanning for all supported package managers
+# in the various sub-folder projects.
+
+version: 2
+updates:
+  # Node.js dependencies (npm/pnpm)
+  - package-ecosystem: "npm"
+    directory: "/node"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(node)"
+      include: "scope"
+
+  # Python dependencies (pip)
+  - package-ecosystem: "pip"
+    directory: "/python"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(python)"
+      include: "scope"
+
+  # Rust dependencies (Cargo)
+  - package-ecosystem: "cargo"
+    directory: "/rust"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(rust)"
+      include: "scope"
+
+  # Elixir dependencies (Mix)
+  # Note: No mix.lock file - always uses latest compatible versions
+  - package-ecosystem: "mix"
+    directory: "/elixir"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(elixir)"
+      include: "scope"
+
+  # Go dependencies (Go modules)
+  - package-ecosystem: "gomod"
+    directory: "/go"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(go)"
+      include: "scope"
+
+  # GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(github-actions)"
+      include: "scope"
+
+  # Docker dependencies (if any Dockerfiles have FROM instructions that can be updated)
+  - package-ecosystem: "docker"
+    directory: "/elixir"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker-elixir)"
+      include: "scope"
+
+  - package-ecosystem: "docker"
+    directory: "/go"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker-go)"
+      include: "scope"
+
+  - package-ecosystem: "docker"
+    directory: "/node"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker-node)"
+      include: "scope"
+
+  - package-ecosystem: "docker"
+    directory: "/python"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker-python)"
+      include: "scope"
+
+  - package-ecosystem: "docker"
+    directory: "/rust"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker-rust)"
+      include: "scope"

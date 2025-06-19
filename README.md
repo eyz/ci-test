@@ -88,18 +88,42 @@ After each push or pull request, check the **Actions** tab to see:
 - 📋 Detailed test results in job summaries
 - 🔍 Container logs and debugging information
 
+### Dependency Management
+
+This repository includes comprehensive **GitHub Dependabot** configuration for automated dependency updates:
+
+#### Supported Package Managers
+
+- **🟢 Node.js**: `package.json` in `/node` directory (npm/pnpm)
+- **🐍 Python**: `requirements.txt` in `/python` directory (pip)
+- **🦀 Rust**: `Cargo.toml` in `/rust` directory (cargo)
+- **💧 Elixir**: `mix.exs` in `/elixir` directory (mix) - always uses latest compatible versions
+- **🐹 Go**: `go.mod` in `/go` directory (go modules)
+- **🐙 GitHub Actions**: Workflow files in `.github/workflows/`
+- **🐳 Docker**: Base images in all `Dockerfile`s
+
+#### Dependabot Features
+
+- **📅 Daily Scanning**: All dependencies checked every day at 06:00 UTC
+- **🏷️ Smart Labeling**: PRs automatically labeled by language and type
+- **📝 Conventional Commits**: Standardized commit messages with prefixes
+- **⚡ Rate Limiting**: Configurable PR limits to avoid overwhelming maintainers
+- **🔄 Multi-directory Support**: Scans each sub-project independently
+
+The configuration is defined in [`.github/dependabot.yml`](./.github/dependabot.yml).
+
 ## Project Structure
 
 ```
 ci-test/
 ├── .github/
+│   ├── dependabot.yml         # Dependabot configuration for all package managers
 │   └── workflows/
 │       └── build-matrix.yml    # CI/CD pipeline configuration
 ├── elixir/                     # Elixir implementation using Plug + Cowboy
 │   ├── Dockerfile
 │   ├── README.md
 │   ├── mix.exs
-│   ├── mix.lock
 │   ├── config/
 │   └── lib/
 ├── go/                         # Go implementation using standard library
@@ -137,6 +161,7 @@ All implementations include:
 - ✅ **Matrix-based CI/CD**: GitHub Actions workflow with configurable service matrix
 - ✅ **Automated Testing**: Container health checks and endpoint validation
 - ✅ **Test Reporting**: Comprehensive status and response tracking
+- ✅ **Dependency Management**: Daily Dependabot scanning for all package managers
 
 **Ultra-minimal deployments**: Go and Rust implementations use statically linked binaries running on scratch images with no Linux distribution in the final layer.
 
@@ -175,6 +200,7 @@ When adding new language implementations:
 6. Add request logging
 7. Update this root README.md
 8. **Add your service to the workflow**: Update the `SERVICES` environment variable in `.github/workflows/build-matrix.yml`
+9. **Dependabot will automatically detect**: New package manager files and start monitoring dependencies
 
 ### Adding New Services
 
