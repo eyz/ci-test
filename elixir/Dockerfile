@@ -1,5 +1,5 @@
 # Multi-stage build for minimal Elixir HTTP server
-FROM elixir:1.18.4-otp-27-alpine AS build
+FROM elixir:1.18-otp-27-alpine AS build
 
 # Install minimal build dependencies
 RUN apk add --no-cache \
