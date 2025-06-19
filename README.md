@@ -68,7 +68,8 @@ The [`.github/workflows/build-matrix.yml`](./.github/workflows/build-matrix.yml)
 - **🏗️ Parallel Builds**: Builds all container images simultaneously using GitHub Actions matrix strategy
 - **🧪 Automated Testing**: Tests each service by starting containers and verifying HTTP responses
 - **📊 Comprehensive Reporting**: Generates detailed test result summaries with status codes and response bodies
-- **🔄 Triggered on**: Push to `main`/`master` branches and pull requests
+- **� Container Registry**: Automatically pushes images to GitHub Container Registry (GHCR) on successful main/master builds
+- **�🔄 Triggered on**: Push to `main`/`master` branches and pull requests
 
 #### Workflow Stages
 
@@ -78,6 +79,7 @@ The [`.github/workflows/build-matrix.yml`](./.github/workflows/build-matrix.yml)
    - Starts container on port 8080
    - Tests HTTP endpoint with health checks
    - Captures response codes and bodies
+   - **Pushes to GHCR**: On main/master branches, pushes successful builds to GitHub Container Registry
    - Uploads test results as artifacts
 3. **Summary**: Consolidates all test results into a formatted report
 
@@ -87,6 +89,45 @@ After each push or pull request, check the **Actions** tab to see:
 - ✅ Build status for each service
 - 📋 Detailed test results in job summaries
 - 🔍 Container logs and debugging information
+
+### GitHub Container Registry (GHCR)
+
+The workflow automatically publishes container images to GitHub Container Registry when:
+- ✅ All tests pass (HTTP 200 response from each service)
+- ✅ Build is on `main` or `master` branch
+
+#### Published Images
+
+Successfully tested images are available at:
+- `ghcr.io/eyz/hello-world-elixir:latest`
+- `ghcr.io/eyz/hello-world-go:latest`
+- `ghcr.io/eyz/hello-world-node:latest`
+- `ghcr.io/eyz/hello-world-python:latest`
+- `ghcr.io/eyz/hello-world-rust:latest`
+
+#### Image Tags
+
+Each successful build creates multiple tags:
+- `latest`: Always points to the most recent successful main/master build
+- `{branch}-{sha}`: Specific commit identifier (e.g., `main-abc1234`)
+- `{branch}`: Branch-specific tag
+
+#### Using Published Images
+
+```bash
+# Pull and run any service
+docker pull ghcr.io/eyz/hello-world-node:latest
+docker run -p 8080:8080 ghcr.io/eyz/hello-world-node:latest
+
+# Test the service
+curl http://localhost:8080
+```
+
+#### Registry Push Logic
+
+The workflow includes explicit logging of push decisions:
+- **✅ Pushed**: "Tests passed and on main/master branch - pushing to registry..."
+- **⏭️ Skipped**: "Skipping registry push: Tests failed" or "Not on main/master branch"
 
 ### Dependency Management
 
@@ -161,6 +202,7 @@ All implementations include:
 - ✅ **Matrix-based CI/CD**: GitHub Actions workflow with configurable service matrix
 - ✅ **Automated Testing**: Container health checks and endpoint validation
 - ✅ **Test Reporting**: Comprehensive status and response tracking
+- ✅ **Container Registry**: Automatic GHCR publishing on successful main/master builds
 - ✅ **Dependency Management**: Daily Dependabot scanning for all package managers
 
 **Ultra-minimal deployments**: Go and Rust implementations use statically linked binaries running on scratch images with no Linux distribution in the final layer.
@@ -171,7 +213,7 @@ This repository is ideal for:
 
 - **CI/CD Pipeline Testing**: Test build and deployment processes across multiple languages
 - **GitHub Actions Development**: Example of dynamic matrix builds and comprehensive testing
-- **Container Registry Testing**: Test image builds and pushes
+- **Container Registry Testing**: Test image builds, pushes, and automated publishing to GHCR
 - **Load Balancer Configuration**: Test routing to different services
 - **Monitoring Setup**: Test metrics collection and health checks
 - **Security Scanning**: Test vulnerability scans across different tech stacks
