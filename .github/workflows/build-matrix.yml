@@ -86,8 +86,9 @@ jobs:
 
     - name: Start container on port 8080
       run: |
-        # Use the image digest from the build step for testing
-        docker run -d --name ${{ matrix.containerName }}-container -p 8080:8080 ${{ steps.build.outputs.digest }}
+        # Use the first tag from metadata for local testing (since image is loaded with tags, not digest)
+        LOCAL_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+        docker run -d --name ${{ matrix.containerName }}-container -p 8080:8080 "$LOCAL_TAG"
 
     - name: Wait for container to be ready
       run: |
