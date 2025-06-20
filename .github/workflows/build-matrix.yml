@@ -11,7 +11,6 @@ permissions:
   contents: read
   attestations: write
   id-token: write
-  metadata: write
 
 jobs:
   prepare:
@@ -280,41 +279,43 @@ jobs:
       run: |
         echo "🌐 Making container package public..."
         
-        # Use GitHub API to make the package public
-        # Try organization packages first, then user packages as fallback
+        # First, let's check if this is a user or organization repository
+        REPO_TYPE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}" | \
+          jq -r '.owner.type // "User"')
+        
+        echo "📋 Repository owner type: $REPO_TYPE"
+        
+        # Try the appropriate API endpoint based on owner type
+        if [ "$REPO_TYPE" = "Organization" ]; then
+          API_URL="https://api.github.com/orgs/${{ github.repository_owner }}/packages/container/${{ matrix.containerName }}"
+        else
+          API_URL="https://api.github.com/users/${{ github.repository_owner }}/packages/container/${{ matrix.containerName }}"
+        fi
+        
+        echo "🔗 Using API endpoint: $API_URL"
+        
+        # Make the API call to set package visibility to public
         RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
           -H "Accept: application/vnd.github+json" \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
-          "https://api.github.com/orgs/${{ github.repository_owner }}/packages/container/${{ matrix.containerName }}" \
+          "$API_URL" \
           -d '{"visibility":"public"}')
         
         HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
         RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
         
         if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 204 ]; then
-          echo "✅ Package made public successfully"
+          echo "✅ Package '${{ matrix.containerName }}' made public successfully"
         else
-          echo "⚠️  Organization package API failed (HTTP $HTTP_CODE), trying user packages..."
-          
-          # Fallback: try user packages
-          USER_RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/users/${{ github.repository_owner }}/packages/container/${{ matrix.containerName }}" \
-            -d '{"visibility":"public"}')
-          
-          USER_HTTP_CODE=$(echo "$USER_RESPONSE" | tail -n1)
-          USER_RESPONSE_BODY=$(echo "$USER_RESPONSE" | head -n -1)
-          
-          if [ "$USER_HTTP_CODE" -eq 200 ] || [ "$USER_HTTP_CODE" -eq 204 ]; then
-            echo "✅ Package made public via user API"
-          else
-            echo "❌ Failed to make package public via API"
-            echo "Response: $USER_RESPONSE_BODY"
-            echo "💡 Please make the package public manually via GitHub web interface"
-          fi
+          echo "❌ Failed to make package public (HTTP $HTTP_CODE)"
+          echo "Response: $RESPONSE_BODY"
+          echo ""
+          echo "💡 Manual solution:"
+          echo "   1. Go to https://github.com/${{ github.repository_owner }}?tab=packages"
+          echo "   2. Click on '${{ matrix.containerName }}' package"
+          echo "   3. Go to Package settings → Change visibility → Public"
         fi
 
     - name: Cleanup container
