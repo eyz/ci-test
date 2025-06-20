@@ -262,3 +262,4 @@ SERVICES: |
   rust:rust/Dockerfile
   java:java/Dockerfile  # <-- Add your new service here
 ```
+
