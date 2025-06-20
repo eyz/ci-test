@@ -137,9 +137,6 @@ jobs:
         # Add attestations for supply chain security
         provenance: true
         sbom: true
-        attestations: |
-          type=provenance,mode=max
-          type=sbom
 
     - name: Registry push status
       if: always()
