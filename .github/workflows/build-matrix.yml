@@ -2,9 +2,9 @@ name: Build Matrix
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 permissions:
   packages: write
@@ -55,7 +55,7 @@ jobs:
       uses: docker/setup-buildx-action@v3
 
     - name: Log in to GitHub Container Registry
-      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      if: github.ref == 'refs/heads/main'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
@@ -68,10 +68,8 @@ jobs:
       with:
         images: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         tags: |
-          type=ref,event=branch
-          type=ref,event=pr
+          type=raw,value=latest
           type=sha
-          type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build Docker image for testing
       id: build
@@ -88,20 +86,16 @@ jobs:
         cache-to: type=gha,mode=max
 
     - name: Start container on port 8080
-      id: start-container
-      continue-on-error: true
       run: |
         # Use the first tag from metadata for local testing (since image is loaded with tags, not digest)
         LOCAL_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
         docker run -d --name ${{ matrix.containerName }}-container -p 8080:8080 "$LOCAL_TAG"
 
     - name: Wait for container to be ready
-      if: steps.start-container.outcome == 'success'
       run: |
         timeout 30 bash -c 'until curl -f http://localhost:8080/ > /dev/null 2>&1; do sleep 2; done' || true
 
     - name: Test endpoint with cURL
-      if: steps.start-container.outcome == 'success'
       run: |
         # Capture both response body and status code in one request
         response=$(curl -s -w "%{http_code}" http://localhost:8080/)
@@ -116,7 +110,7 @@ jobs:
         echo "HTTP response code: $response_code"
         echo "HTTP response body: $response_body_clean"
 
-        # Store test results in artifacts for summary job (always create this)
+        # Store test results in artifacts for summary job
         mkdir -p test-results
         echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},$response_code,$response_body_clean" > test-results/${{ matrix.containerName }}.csv
 
@@ -126,32 +120,22 @@ jobs:
         else
           echo "❌ Test failed: Expected HTTP 200, got $response_code"
           echo "TEST_PASSED=false" >> $GITHUB_ENV
-          # Don't exit here - let the workflow continue to upload results and clean up
+          exit 1
         fi
 
-    - name: Handle container start failure
-      if: steps.start-container.outcome == 'failure'
-      run: |
-        echo "❌ Container failed to start"
-        echo "HTTP response code: N/A"
-        echo "HTTP response body: Container start failed"
-        
-        # Create test results for failed container start
-        mkdir -p test-results
-        echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},000,Container start failed" > test-results/${{ matrix.containerName }}.csv
-        echo "TEST_PASSED=false" >> $GITHUB_ENV
-
     - name: Generate SBOM
-      if: env.TEST_PASSED == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       uses: anchore/sbom-action@v0
       with:
         path: .
         format: spdx-json
         output-file: sbom.spdx.json
+        upload-artifact: false
+        upload-release-assets: false
 
     - name: Build and push image with attestations
       id: build-push
-      if: env.TEST_PASSED == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       uses: docker/build-push-action@v5
       with:
         context: .
@@ -167,7 +151,7 @@ jobs:
         sbom: true
 
     - name: Generate GitHub artifact attestation
-      if: env.TEST_PASSED == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       uses: actions/attest-build-provenance@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
@@ -175,7 +159,7 @@ jobs:
         push-to-registry: true
 
     - name: Generate SBOM attestation
-      if: env.TEST_PASSED == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       uses: actions/attest-sbom@v1
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
@@ -183,39 +167,19 @@ jobs:
         sbom-path: sbom.spdx.json
         push-to-registry: true
 
-    - name: Registry push status
-      if: always()
-      run: |
-        if [[ "${{ env.TEST_PASSED }}" == "true" && ("${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == "refs/heads/master") ]]; then
-          echo "✅ Image was pushed to registry (tests passed + main/master branch)"
-        elif [[ "${{ env.TEST_PASSED }}" != "true" ]]; then
-          echo "⏭️ Skipping registry push: Tests failed"
-        elif [[ "${{ github.ref }}" != "refs/heads/main" && "${{ github.ref }}" != "refs/heads/master" ]]; then
-          echo "⏭️ Skipping registry push: Not on main/master branch (current: ${{ github.ref }})"
-        else
-          echo "⏭️ Skipping registry push: Unknown condition"
-        fi
-
     - name: Upload test results
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-results-${{ github.job }}-${{ matrix.containerName }}-${{ github.run_number }}
+        name: test-results-${{ matrix.containerName }}
         path: test-results/
         retention-days: 1
-        if-no-files-found: error
 
     - name: Cleanup container
       if: always()
       run: |
         docker stop ${{ matrix.containerName }}-container || true
         docker rm ${{ matrix.containerName }}-container || true
-
-    - name: Fail job if tests failed
-      if: always() && env.TEST_PASSED == 'false'
-      run: |
-        echo "❌ Job failed due to test failures"
-        exit 1
 
   summary:
     runs-on: ubuntu-latest
@@ -226,7 +190,7 @@ jobs:
     - name: Download all test results
       uses: actions/download-artifact@v4
       with:
-        pattern: test-results-build-*-${{ github.run_number }}
+        pattern: test-results-*
         path: all-results
         merge-multiple: true
 
@@ -251,8 +215,8 @@ jobs:
 
         echo "" >> $GITHUB_STEP_SUMMARY
 
-        # Add registry push information for main/master builds
-        if [[ "$GITHUB_REF" == "refs/heads/main" || "$GITHUB_REF" == "refs/heads/master" ]]; then
+        # Add registry push information for main builds
+        if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
           echo "## 📦 Published Container Images" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The following images were pushed to GitHub Container Registry:" >> $GITHUB_STEP_SUMMARY
@@ -262,7 +226,7 @@ jobs:
               IFS=',' read -r container dockerfile_path status_code response_body < "$file"
               if [ "$status_code" -eq 200 ]; then
                 echo "- 📦 \`ghcr.io/${{ github.repository_owner }}/$container:latest\`" >> $GITHUB_STEP_SUMMARY
-                echo "- 📦 \`ghcr.io/${{ github.repository_owner }}/$container:${{ github.ref_name }}-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+                echo "- 📦 \`ghcr.io/${{ github.repository_owner }}/$container:sha-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
               fi
             fi
           done
