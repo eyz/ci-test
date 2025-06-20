@@ -9,6 +9,8 @@ on:
 permissions:
   packages: write
   contents: read
+  attestations: write
+  id-token: write
 
 jobs:
   prepare:
@@ -122,7 +124,16 @@ jobs:
           exit 1
         fi
 
+    - name: Generate SBOM
+      if: env.TEST_PASSED == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      uses: anchore/sbom-action@v0
+      with:
+        path: .
+        format: spdx-json
+        output-file: sbom.spdx.json
+
     - name: Build and push image with attestations
+      id: build-push
       if: env.TEST_PASSED == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
       uses: docker/build-push-action@v5
       with:
@@ -137,6 +148,23 @@ jobs:
         # Add attestations for supply chain security
         provenance: true
         sbom: true
+
+    - name: Generate GitHub artifact attestation
+      if: env.TEST_PASSED == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      uses: actions/attest-build-provenance@v2
+      with:
+        subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
+        subject-digest: ${{ steps.build-push.outputs.digest }}
+        push-to-registry: true
+
+    - name: Generate SBOM attestation
+      if: env.TEST_PASSED == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      uses: actions/attest-sbom@v1
+      with:
+        subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
+        subject-digest: ${{ steps.build-push.outputs.digest }}
+        sbom-path: sbom.spdx.json
+        push-to-registry: true
 
     - name: Registry push status
       if: always()
@@ -216,6 +244,15 @@ jobs:
           done
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> 💡 **Pull images:** \`docker pull ghcr.io/${{ github.repository_owner }}/IMAGE_NAME:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔐 Security & Attestations" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All published images include comprehensive supply chain security attestations:" >> $GITHUB_STEP_SUMMARY
+          echo "- 🛡️ **Build Provenance**: GitHub artifact attestations establishing build source and environment" >> $GITHUB_STEP_SUMMARY
+          echo "- 📋 **SBOM**: Software Bill of Materials attestations in SPDX format" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 **Docker Attestations**: Native Docker BuildKit provenance and SBOM" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 🔍 **Verify attestations:** \`gh attestation verify oci://ghcr.io/${{ github.repository_owner }}/IMAGE_NAME:latest -R ${{ github.repository }}\`" >> $GITHUB_STEP_SUMMARY
         fi
 
         echo "" >> $GITHUB_STEP_SUMMARY
