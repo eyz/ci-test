@@ -274,49 +274,19 @@ jobs:
         path: attestation-results/
         retention-days: 1
 
-    - name: Make container package public
+    - name: Package visibility information
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       run: |
-        echo "🌐 Making container package public..."
-        
-        # First, let's check if this is a user or organization repository
-        REPO_TYPE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/${{ github.repository }}" | \
-          jq -r '.owner.type // "User"')
-        
-        echo "📋 Repository owner type: $REPO_TYPE"
-        
-        # Try the appropriate API endpoint based on owner type
-        if [ "$REPO_TYPE" = "Organization" ]; then
-          API_URL="https://api.github.com/orgs/${{ github.repository_owner }}/packages/container/${{ matrix.containerName }}"
-        else
-          API_URL="https://api.github.com/users/${{ github.repository_owner }}/packages/container/${{ matrix.containerName }}"
-        fi
-        
-        echo "🔗 Using API endpoint: $API_URL"
-        
-        # Make the API call to set package visibility to public
-        RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          "$API_URL" \
-          -d '{"visibility":"public"}')
-        
-        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-        RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
-        
-        if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 204 ]; then
-          echo "✅ Package '${{ matrix.containerName }}' made public successfully"
-        else
-          echo "❌ Failed to make package public (HTTP $HTTP_CODE)"
-          echo "Response: $RESPONSE_BODY"
-          echo ""
-          echo "💡 Manual solution:"
-          echo "   1. Go to https://github.com/${{ github.repository_owner }}?tab=packages"
-          echo "   2. Click on '${{ matrix.containerName }}' package"
-          echo "   3. Go to Package settings → Change visibility → Public"
-        fi
+        echo "📦 Container package published: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}"
+        echo "🔒 Package is currently private by default"
+        echo ""
+        echo "To make it public:"
+        echo "1. Go to https://github.com/${{ github.repository_owner }}?tab=packages"
+        echo "2. Click on '${{ matrix.containerName }}' package"
+        echo "3. Go to Package settings (⚙️) → Change visibility → Public"
+        echo ""
+        echo "Or use the GitHub CLI:"
+        echo "gh api -X PATCH /user/packages/container/${{ matrix.containerName }} -f visibility=public"
 
     - name: Cleanup container
       if: always()
@@ -431,21 +401,40 @@ jobs:
 
         echo "" >> $GITHUB_STEP_SUMMARY
 
-        # Make container packages public for main branch builds
+        # Container package visibility information for main branch builds
         if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
-          echo "## 🌐 Container Package Visibility" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Published Container Images" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The following container packages were made public:" >> $GITHUB_STEP_SUMMARY
+          echo "The following images were pushed to GitHub Container Registry:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
           for file in all-results/*.csv; do
             if [ -f "$file" ]; then
               IFS=',' read -r container dockerfile_path status_code response_body < "$file"
-              echo "- 📦 \`$container\`" >> $GITHUB_STEP_SUMMARY
+              if [ "$status_code" -eq 200 ]; then
+                echo "- 📦 \`ghcr.io/${{ github.repository_owner }}/$container:latest\`" >> $GITHUB_STEP_SUMMARY
+                echo "- 📦 \`ghcr.io/${{ github.repository_owner }}/$container:sha-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+              fi
             fi
           done
-          
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> 💡 **Make package public:** `curl -X PATCH -H \"Authorization: Bearer YOUR_TOKEN\" -d '{\"visibility\":\"public\"}' https://api.github.com/orgs/YOUR_ORG/packages/container/YOUR_PACKAGE`" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🔒 Making Packages Public" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Container packages are **private by default**. To make them public:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Option 1: Via GitHub Web Interface**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Go to [Your Packages](https://github.com/${{ github.repository_owner }}?tab=packages)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Click on a package name" >> $GITHUB_STEP_SUMMARY
+          echo "3. Go to Package settings ⚙️ → Change visibility → Public" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Option 2: Via GitHub CLI**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "gh api -X PATCH /user/packages/container/PACKAGE_NAME -f visibility=public" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Then you can pull images:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ghcr.io/${{ github.repository_owner }}/hello-world-go:latest" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
         fi
