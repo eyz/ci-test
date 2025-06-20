@@ -72,7 +72,7 @@ jobs:
 
     - name: Build Docker image for ${{ matrix.containerName }}
       run: |
-        docker build -t ${{ matrix.containerName }} -f ${{ matrix.dockerfilePath }} .
+        docker build -t ${{ matrix.containerName }} -f ${{ matrix.dockerfilePath }} --label org.opencontainers.image.source="https://github.com/${{ github.repository }}" .
 
     - name: Start container on port 8080
       run: |
