@@ -16,14 +16,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      matrixInclude: ${{ steps.gen.outp            for file in all-attestations/*.csv; do
-              if [ -f "$file" ]; then
-                IFS=',' read -r container dockerfile_path digest build_status sbom_status < "$file"
-                short_digest="${digest#sha256:}"
-                short_digest="${short_digest:0:12}"
-                echo "| **$container** | \`$dockerfile_path\` | \`$short_digest...\` | $build_status | $sbom_status | \`gh attestation verify oci://ghcr.io/${{ github.repository_owner }}/$container:latest\` |" >> $GITHUB_STEP_SUMMARY
-              fi
-            doneixInclude }}
+      matrixInclude: ${{ steps.gen.outputs.matrixInclude }}
     steps:
       - id: gen
         env:
