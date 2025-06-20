@@ -123,18 +123,27 @@ jobs:
           exit 1
         fi
 
-    - name: Generate SBOM
+    - name: Generate SBOM using Microsoft's official tool
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
-      uses: anchore/sbom-action@v0
-      with:
-        path: .
-        format: spdx-json
-        output-file: sbom.spdx.json
-        upload-artifact: false
-        upload-release-assets: false
-      env:
-        # Suppress verbose SBOM generation output
-        ANCHORE_SBOM_QUIET: true
+      run: |
+        echo "📋 Generating SBOM with Microsoft's official sbom-tool..."
+        
+        # Download and install Microsoft's official sbom-tool
+        curl -Lo sbom-tool https://github.com/microsoft/sbom-tool/releases/latest/download/sbom-tool-linux-x64
+        chmod +x sbom-tool
+        
+        # Generate SBOM in SPDX 2.2 format (compatible with GitHub attestations)
+        ./sbom-tool generate \
+          -b . \
+          -bc . \
+          -pn "${{ matrix.containerName }}" \
+          -pv "sha-${{ github.sha }}" \
+          -ps "${{ github.repository_owner }}" \
+          -nsb "https://github.com/${{ github.repository_owner }}" \
+          -mi SPDX:2.2 \
+          -o sbom.spdx.json
+        
+        echo "✅ SBOM generated successfully"
 
     - name: Build and push image with attestations
       id: build-push
@@ -169,23 +178,23 @@ jobs:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         subject-digest: ${{ steps.build-push.outputs.digest }}
         push-to-registry: true
+        show-summary: false
       env:
         ACTIONS_STEP_DEBUG: false
-        # Suppress detailed output - summary will be shown at end
         RUNNER_DEBUG: 0
 
     - name: Generate SBOM attestation
       id: sbom-attestation
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
-      uses: actions/attest-sbom@v1
+      uses: actions/attest-sbom@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         subject-digest: ${{ steps.build-push.outputs.digest }}
         sbom-path: sbom.spdx.json
         push-to-registry: true
+        show-summary: false
       env:
         ACTIONS_STEP_DEBUG: false
-        # Suppress detailed output - summary will be shown at end
         RUNNER_DEBUG: 0
 
     - name: Store attestation results
