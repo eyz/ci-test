@@ -132,6 +132,9 @@ jobs:
         output-file: sbom.spdx.json
         upload-artifact: false
         upload-release-assets: false
+      env:
+        # Suppress verbose SBOM generation output
+        ANCHORE_SBOM_QUIET: true
 
     - name: Build and push image with attestations
       id: build-push
@@ -150,6 +153,14 @@ jobs:
         provenance: true
         sbom: true
 
+    - name: Generate attestations
+      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      run: |
+        echo "🔐 Generating security attestations for ${{ matrix.containerName }}..."
+        echo "   → Build provenance attestation"
+        echo "   → SBOM attestation"
+        echo "   (Individual attestation outputs suppressed - see combined summary)"
+
     - name: Generate GitHub artifact attestation
       id: build-attestation
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
@@ -158,6 +169,10 @@ jobs:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         subject-digest: ${{ steps.build-push.outputs.digest }}
         push-to-registry: true
+      env:
+        ACTIONS_STEP_DEBUG: false
+        # Suppress detailed output - summary will be shown at end
+        RUNNER_DEBUG: 0
 
     - name: Generate SBOM attestation
       id: sbom-attestation
@@ -168,25 +183,35 @@ jobs:
         subject-digest: ${{ steps.build-push.outputs.digest }}
         sbom-path: sbom.spdx.json
         push-to-registry: true
+      env:
+        ACTIONS_STEP_DEBUG: false
+        # Suppress detailed output - summary will be shown at end
+        RUNNER_DEBUG: 0
 
     - name: Store attestation results
       if: always() && env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       run: |
+        echo "📝 Storing attestation results for summary..."
         mkdir -p attestation-results
         
-        # Check if attestations were successful
+        # Check if attestations were successful and capture URLs
         build_status="❌ Failed"
         sbom_status="❌ Failed"
+        build_url=""
+        sbom_url=""
         
         if [[ "${{ steps.build-attestation.outcome }}" == "success" ]]; then
           build_status="✅ Signed"
+          build_url="${{ steps.build-attestation.outputs.attestation-url }}"
         fi
         
         if [[ "${{ steps.sbom-attestation.outcome }}" == "success" ]]; then
           sbom_status="✅ Signed"
+          sbom_url="${{ steps.sbom-attestation.outputs.attestation-url }}"
         fi
         
-        echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},${{ steps.build-push.outputs.digest }},$build_status,$sbom_status" > attestation-results/${{ matrix.containerName }}.csv
+        echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},${{ steps.build-push.outputs.digest }},$build_status,$sbom_status,$build_url,$sbom_url" > attestation-results/${{ matrix.containerName }}.csv
+        echo "✅ Attestation results stored for ${{ matrix.containerName }}"
 
     - name: Upload test results
       if: always()
@@ -280,10 +305,25 @@ jobs:
             
             for file in all-attestations/*.csv; do
               if [ -f "$file" ]; then
-                IFS=',' read -r container dockerfile_path digest build_bundle sbom_bundle < "$file"
+                IFS=',' read -r container dockerfile_path digest build_status sbom_status build_url sbom_url < "$file"
                 short_digest="${digest#sha256:}"
                 short_digest="${short_digest:0:12}"
-                echo "| **$container** | \`$dockerfile_path\` | \`$short_digest...\` | ✅ Signed | ✅ Signed | \`gh attestation verify oci://ghcr.io/${{ github.repository_owner }}/$container:latest\` |" >> $GITHUB_STEP_SUMMARY
+                
+                # Create hyperlinked status for build provenance
+                if [[ "$build_status" == "✅ Signed" && -n "$build_url" ]]; then
+                  build_display="[✅ Signed]($build_url)"
+                else
+                  build_display="$build_status"
+                fi
+                
+                # Create hyperlinked status for SBOM
+                if [[ "$sbom_status" == "✅ Signed" && -n "$sbom_url" ]]; then
+                  sbom_display="[✅ Signed]($sbom_url)"
+                else
+                  sbom_display="$sbom_status"
+                fi
+                
+                echo "| **$container** | \`$dockerfile_path\` | \`$short_digest...\` | $build_display | $sbom_display | \`gh attestation verify oci://ghcr.io/${{ github.repository_owner }}/$container:latest\` |" >> $GITHUB_STEP_SUMMARY
               fi
             done
             
