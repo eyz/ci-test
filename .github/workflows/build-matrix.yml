@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main, master ]
 
+permissions:
+  packages: write
+  content: read
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
