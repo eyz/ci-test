@@ -70,13 +70,24 @@ jobs:
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
 
-    - name: Build Docker image for ${{ matrix.containerName }}
-      run: |
-        docker build -t ${{ matrix.containerName }} -f ${{ matrix.dockerfilePath }} --label org.opencontainers.image.source="https://github.com/${{ github.repository }}" .
+    - name: Build and optionally push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ${{ matrix.dockerfilePath }}
+        platforms: linux/amd64
+        push: false  # We'll push later after testing
+        load: true  # Load image into local Docker daemon for testing
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
     - name: Start container on port 8080
       run: |
-        docker run -d --name ${{ matrix.containerName }}-container -p 8080:8080 ${{ matrix.containerName }}
+        # Use the image digest from the build step for testing
+        docker run -d --name ${{ matrix.containerName }}-container -p 8080:8080 ${{ steps.build.outputs.digest }}
 
     - name: Wait for container to be ready
       run: |
@@ -112,17 +123,16 @@ jobs:
 
     - name: Push to GitHub Container Registry
       if: env.TEST_PASSED == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-      run: |
-        echo "🚀 Tests passed and on main/master branch - pushing to registry..."
-        # Tag and push the image with all metadata tags
-        echo "${{ steps.meta.outputs.tags }}" | while read -r tag; do
-          if [[ -n "$tag" ]]; then
-            echo "Tagging and pushing: $tag"
-            docker tag ${{ matrix.containerName }} "$tag"
-            docker push "$tag"
-            echo "✅ Pushed: $tag"
-          fi
-        done
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ${{ matrix.dockerfilePath }}
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
     - name: Registry push status
       if: always()
