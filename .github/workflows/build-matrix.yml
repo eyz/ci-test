@@ -386,3 +386,22 @@ jobs:
         fi
 
         echo "" >> $GITHUB_STEP_SUMMARY
+
+        # Make container packages public for main branch builds
+        if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+          echo "## 🌐 Container Package Visibility" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The following container packages were made public:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          for file in all-results/*.csv; do
+            if [ -f "$file" ]; then
+              IFS=',' read -r container dockerfile_path status_code response_body < "$file"
+              echo "- 📦 \`$container\`" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 💡 **Make package public:** `curl -X PATCH -H \"Authorization: Bearer YOUR_TOKEN\" -d '{\"visibility\":\"public\"}' https://api.github.com/orgs/YOUR_ORG/packages/container/YOUR_PACKAGE`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
