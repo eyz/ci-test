@@ -111,7 +111,7 @@ jobs:
         echo "HTTP response code: $response_code"
         echo "HTTP response body: $response_body_clean"
 
-        # Store test results in artifacts for summary job
+        # Store test results in artifacts for summary job (always create this)
         mkdir -p test-results
         echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},$response_code,$response_body_clean" > test-results/${{ matrix.containerName }}.csv
 
@@ -121,7 +121,7 @@ jobs:
         else
           echo "❌ Test failed: Expected HTTP 200, got $response_code"
           echo "TEST_PASSED=false" >> $GITHUB_ENV
-          exit 1
+          # Don't exit here - let the workflow continue to upload results and clean up
         fi
 
     - name: Generate SBOM
@@ -183,7 +183,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-results-${{ matrix.containerName }}
+        name: test-results-${{ matrix.containerName }}-${{ github.run_number }}
         path: test-results/
         retention-days: 1
 
@@ -192,6 +192,12 @@ jobs:
       run: |
         docker stop ${{ matrix.containerName }}-container || true
         docker rm ${{ matrix.containerName }}-container || true
+
+    - name: Fail job if tests failed
+      if: always() && env.TEST_PASSED == 'false'
+      run: |
+        echo "❌ Job failed due to test failures"
+        exit 1
 
   summary:
     runs-on: ubuntu-latest
@@ -202,7 +208,7 @@ jobs:
     - name: Download all test results
       uses: actions/download-artifact@v4
       with:
-        pattern: test-results-*
+        pattern: test-results-*-${{ github.run_number }}
         path: all-results
         merge-multiple: true
 
