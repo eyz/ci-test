@@ -43,6 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: prepare
     strategy:
+      fail-fast: false
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.matrixInclude) }}
 
@@ -87,16 +88,20 @@ jobs:
         cache-to: type=gha,mode=max
 
     - name: Start container on port 8080
+      id: start-container
+      continue-on-error: true
       run: |
         # Use the first tag from metadata for local testing (since image is loaded with tags, not digest)
         LOCAL_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
         docker run -d --name ${{ matrix.containerName }}-container -p 8080:8080 "$LOCAL_TAG"
 
     - name: Wait for container to be ready
+      if: steps.start-container.outcome == 'success'
       run: |
         timeout 30 bash -c 'until curl -f http://localhost:8080/ > /dev/null 2>&1; do sleep 2; done' || true
 
     - name: Test endpoint with cURL
+      if: steps.start-container.outcome == 'success'
       run: |
         # Capture both response body and status code in one request
         response=$(curl -s -w "%{http_code}" http://localhost:8080/)
@@ -123,6 +128,18 @@ jobs:
           echo "TEST_PASSED=false" >> $GITHUB_ENV
           # Don't exit here - let the workflow continue to upload results and clean up
         fi
+
+    - name: Handle container start failure
+      if: steps.start-container.outcome == 'failure'
+      run: |
+        echo "❌ Container failed to start"
+        echo "HTTP response code: N/A"
+        echo "HTTP response body: Container start failed"
+        
+        # Create test results for failed container start
+        mkdir -p test-results
+        echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},000,Container start failed" > test-results/${{ matrix.containerName }}.csv
+        echo "TEST_PASSED=false" >> $GITHUB_ENV
 
     - name: Generate SBOM
       if: env.TEST_PASSED == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
@@ -183,9 +200,10 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-results-${{ matrix.containerName }}-${{ github.run_number }}
+        name: test-results-${{ matrix.containerName }}-${{ github.run_id }}-${{ github.run_attempt }}
         path: test-results/
         retention-days: 1
+        if-no-files-found: error
 
     - name: Cleanup container
       if: always()
@@ -208,7 +226,7 @@ jobs:
     - name: Download all test results
       uses: actions/download-artifact@v4
       with:
-        pattern: test-results-*-${{ github.run_number }}
+        pattern: test-results-*-${{ github.run_id }}-${{ github.run_attempt }}
         path: all-results
         merge-multiple: true
 
