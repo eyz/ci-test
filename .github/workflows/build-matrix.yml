@@ -208,12 +208,8 @@ jobs:
         cache-to: type=gha,mode=max
         outputs: type=registry,oci-mediatypes=true,compression=gzip,compression-level=6
         provenance: mode=max
-        # Generate comprehensive SBOMs with all available BuildKit generators
-        attests: |
-          type=sbom,generator=image
-          type=sbom,generator=container
-          type=sbom,generator=config
-          type=sbom,generator=dockerfile
+        # Generate SBOM with the most comprehensive generator
+        sbom: true
 
     - name: Verify comprehensive build outputs
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
