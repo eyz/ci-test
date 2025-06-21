@@ -16,40 +16,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      matrixInclu    - name: Create comprehensive SBOM summary
-      id: create-summary
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
-      run: |
-        echo "📋 Creating comprehensive SBOM summary..."
-        
-        # Create enhanced summary for ar            # Process each container's detailed SBOM summary from the build step
-            for summary_file in all-sboms/sbom-summary.txt; do
-              if [ -f "$summary_file" ]; then
-                echo "### 📋 Enhanced SBOM Analysis with BuildKit Features" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-                cat "$summary_file" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-              fi
-            done     source_packages=$(jq -r '.packages | length' microsoft-sbom.spdx.json 2>/dev/null || echo "0")
-        
-        echo "Enhanced SBOM Summary for ${{ matrix.containerName }}" > sbom-summary.txt
-        echo "=================================" >> sbom-summary.txt
-        echo "Source dependencies: $source_packages packages (Microsoft sbom-tool)" >> sbom-summary.txt
-        echo "Container layers: Comprehensive multi-layer analysis (BuildKit)" >> sbom-summary.txt
-        echo "Attestation format: OCI artifact format with enhanced metadata" >> sbom-summary.txt
-        echo "SBOM generators:" >> sbom-summary.txt
-        echo "  - Microsoft sbom-tool (source analysis + license info + metadata parsing)" >> sbom-summary.txt
-        echo "  - BuildKit image generator (container layers)" >> sbom-summary.txt
-        echo "  - Enhanced provenance with max-level detail" >> sbom-summary.txt
-        echo "Enhanced features:" >> sbom-summary.txt
-        echo "  - License information fetching from ClearlyDefined API" >> sbom-summary.txt
-        echo "  - Package metadata parsing (RubyGems, NuGet, Maven, npm)" >> sbom-summary.txt
-        echo "  - Symlink following for comprehensive coverage" >> sbom-summary.txt
-        echo "  - 30-second timeout for license information gathering" >> sbom-summary.txt
-        echo "BuildKit features: Multi-layer SBOM, image-based generation" >> sbom-summary.txt
-        echo "Supply chain coverage: Source + Container + Build environment + Licenses" >> sbom-summary.txt.gen.outputs.matrixInclude }}
+      matrixInclude: ${{ steps.gen.outputs.matrixInclude }}
     steps:
       - id: gen
         env:
