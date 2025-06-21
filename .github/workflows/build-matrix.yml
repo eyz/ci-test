@@ -213,9 +213,11 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
         outputs: type=registry,oci-mediatypes=true,compression=gzip,compression-level=6
-        provenance: mode=max
-        # Generate SBOM with the most comprehensive generator
-        sbom: true
+        provenance: false
+        sbom: false
+        attest: |
+          type=provenance,mode=max
+          type=sbom,generator=docker/default,output=buildkit-sbom-${{ matrix.containerName }}.spdx.json
 
     - name: Verify comprehensive build outputs
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
@@ -257,14 +259,14 @@ jobs:
         ACTIONS_STEP_DEBUG: false
         RUNNER_DEBUG: 0
 
-    - name: Generate CycloneDX SBOM attestation
-      id: cyclonedx-sbom-attestation
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main' && steps.generate-sboms.outputs.cyclonedx_generated == 'true'
+    - name: Generate BuildKit SBOM attestation
+      id: buildkit-sbom-attestation
+      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       uses: actions/attest-sbom@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         subject-digest: ${{ steps.build-push.outputs.digest }}
-        sbom-path: source-sbom-${{ matrix.containerName }}.cyclonedx.json
+        sbom-path: buildkit-sbom-${{ matrix.containerName }}.spdx.json
         push-to-registry: true
         show-summary: false
       env:
@@ -294,10 +296,10 @@ jobs:
         # Check if attestations were successful and capture URLs
         build_status="❌ Failed"
         microsoft_sbom_status="❌ Failed"
-        buildkit_sbom_status="✅ Auto-generated"
+        buildkit_sbom_status="❌ Failed"
         build_url=""
         microsoft_sbom_url=""
-        buildkit_sbom_url="Built-in BuildKit attestation"
+        buildkit_sbom_url=""
         
         if [[ "${{ steps.build-attestation.outcome }}" == "success" ]]; then
           build_status="✅ Signed"
@@ -307,6 +309,11 @@ jobs:
         if [[ "${{ steps.spdx-sbom-attestation.outcome }}" == "success" ]]; then
           microsoft_sbom_status="✅ Signed"
           microsoft_sbom_url="${{ steps.spdx-sbom-attestation.outputs.attestation-url }}"
+        fi
+        
+        if [[ "${{ steps.buildkit-sbom-attestation.outcome }}" == "success" ]]; then
+          buildkit_sbom_status="✅ Signed"
+          buildkit_sbom_url="${{ steps.buildkit-sbom-attestation.outputs.attestation-url }}"
         fi
         
         echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},${{ steps.build-push.outputs.digest }},$build_status,$microsoft_sbom_status,$buildkit_sbom_status,$build_url,$microsoft_sbom_url,$buildkit_sbom_url" > attestation-results/${{ matrix.containerName }}.csv
@@ -337,6 +344,7 @@ jobs:
           source-sbom-${{ matrix.containerName }}.spdx.json
           source-sbom-${{ matrix.containerName }}.cyclonedx.json
           sbom-summary-${{ matrix.containerName }}.txt
+          buildkit-sbom-${{ matrix.containerName }}.spdx.json
         if-no-files-found: ignore
         retention-days: 30
 
