@@ -155,13 +155,13 @@ jobs:
           -pv "sha-${{ github.sha }}" \
           -ps "${{ github.repository_owner }}" \
           -nsb "https://github.com/${{ github.repository }}" \
-          -mi SPDX:2.2,CycloneDX:1.5 \
+          -mi SPDX:2.2,CycloneDX:1.4 \
           -m sbom-output \
           -li true \
           -pm true \
           -lto 60 \
           -F true || {
-            echo "⚠️  SBOM generation completed with warnings (normal for simple apps)"
+            echo "⚠️  SBOM generation completed with warnings (expected for simple apps like Go/Elixir without package manifests)"
             # Create minimal SBOM if none generated
             if [ ! -f "sbom-output/_manifest/spdx_2.2/manifest.spdx.json" ]; then
               mkdir -p sbom-output/_manifest/spdx_2.2
@@ -183,8 +183,8 @@ jobs:
         
         # Copy for attestation - both formats
         cp sbom-output/_manifest/spdx_2.2/manifest.spdx.json source-sbom-${{ matrix.containerName }}.spdx.json
-        if [ -f "sbom-output/_manifest/cyclonedx_1.5/manifest.cyclonedx.json" ]; then
-          cp sbom-output/_manifest/cyclonedx_1.5/manifest.cyclonedx.json source-sbom-${{ matrix.containerName }}.cyclonedx.json
+        if [ -f "sbom-output/_manifest/cyclonedx_1.4/manifest.cyclonedx.json" ]; then
+          cp sbom-output/_manifest/cyclonedx_1.4/manifest.cyclonedx.json source-sbom-${{ matrix.containerName }}.cyclonedx.json
         fi
         
         SOURCE_PACKAGES=$(jq -r '.packages | length' source-sbom-${{ matrix.containerName }}.spdx.json 2>/dev/null || echo "0")
@@ -194,49 +194,28 @@ jobs:
           echo "✅ Source code SBOM (CycloneDX): $CYCLONEDX_PACKAGES components"
         fi
         
-        # Generate BuildKit SBOM from the locally built image
-        echo "🔍 Generating BuildKit container SBOM..."
+        # Generate BuildKit SBOM from the locally built image using built-in syft
+        echo "🔍 Generating BuildKit container SBOM with built-in syft..."
         LOCAL_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
         
-        # Try docker sbom with basic output redirection since flags are not supported
-        if docker sbom "$LOCAL_TAG" > buildkit-sbom-${{ matrix.containerName }}.spdx.json 2>/dev/null; then
+        # Use the built-in syft that's already available in GitHub Actions
+        echo "🔍 Analyzing container image with syft..."
+        syft "$LOCAL_TAG" -o spdx-json > buildkit-sbom-${{ matrix.containerName }}.spdx.json
+        
+        # Validate and report SBOM contents
+        if [ -f "buildkit-sbom-${{ matrix.containerName }}.spdx.json" ]; then
           BUILDKIT_PACKAGES=$(jq -r '.packages | length' buildkit-sbom-${{ matrix.containerName }}.spdx.json 2>/dev/null || echo "0")
-          echo "✅ BuildKit SBOM (SPDX): $BUILDKIT_PACKAGES packages"
-        else
-          echo "⚠️  Docker sbom not available, creating placeholder BuildKit SBOM"
-          # Create a minimal BuildKit-style SBOM as placeholder
-          echo '{
-            "spdxVersion": "SPDX-2.2",
-            "dataLicense": "CC0-1.0",
-            "SPDXID": "SPDXRef-DOCUMENT",
-            "name": "${{ matrix.containerName }}-buildkit",
-            "documentNamespace": "https://github.com/${{ github.repository }}/${{ matrix.containerName }}-buildkit/sha-${{ github.sha }}",
-            "creationInfo": {
-              "created": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
-              "creators": ["Tool: Docker-BuildKit-Placeholder"]
-            },
-            "packages": [
-              {
-                "SPDXID": "SPDXRef-Package-Container",
-                "name": "${{ matrix.containerName }}",
-                "downloadLocation": "NOASSERTION",
-                "filesAnalyzed": false,
-                "packageVerificationCode": {
-                  "packageVerificationCodeValue": "0000000000000000000000000000000000000000"
-                }
-              }
-            ],
-            "relationships": [
-              {
-                "spdxElementId": "SPDXRef-DOCUMENT",
-                "relationshipType": "DESCRIBES",
-                "relatedSpdxElement": "SPDXRef-Package-Container"
-              }
-            ]
-          }' > buildkit-sbom-${{ matrix.containerName }}.spdx.json
+          echo "✅ BuildKit SBOM (SPDX): $BUILDKIT_PACKAGES packages detected in container"
           
-          BUILDKIT_PACKAGES=$(jq -r '.packages | length' buildkit-sbom-${{ matrix.containerName }}.spdx.json 2>/dev/null || echo "0")
-          echo "✅ BuildKit SBOM (SPDX): $BUILDKIT_PACKAGES packages (placeholder)"
+          # Show some details about what was found
+          if [ "$BUILDKIT_PACKAGES" -gt 0 ]; then
+            echo "📦 Container analysis complete - found system packages, libraries, and dependencies"
+          else
+            echo "📦 Container analysis complete - minimal container with few detectable packages"
+          fi
+        else
+          echo "❌ Failed to generate container SBOM"
+          exit 1
         fi
 
     - name: Build and push image with comprehensive attestations
