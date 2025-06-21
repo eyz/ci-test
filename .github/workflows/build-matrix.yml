@@ -123,25 +123,31 @@ jobs:
           exit 1
         fi
 
-    - name: Generate SBOM using Microsoft's official tool
+    - name: Generate comprehensive SBOMs (Microsoft sbom-tool + BuildKit)
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       run: |
-        echo "📋 Generating SBOM with Microsoft's official sbom-tool..."
+        echo "📋 Generating comprehensive SBOMs with multiple tools..."
+        
+        # Install required tools
+        echo "🔧 Installing tools..."
+        
+        # Install yq for JSON to YAML conversion
+        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
         
         # Download and install Microsoft's official sbom-tool
         curl -Lo sbom-tool https://github.com/microsoft/sbom-tool/releases/latest/download/sbom-tool-linux-x64
         chmod +x sbom-tool
         
-        # Create output directory for SBOM
-        mkdir -p sbom-output
+        # Create output directories
+        mkdir -p sbom-output sbom-buildkit sbom-yaml
         
         # Extract the directory path from the dockerfile path for targeted scanning
         DOCKERFILE_DIR=$(dirname "${{ matrix.dockerfilePath }}")
         
-        echo "🔍 Scanning $DOCKERFILE_DIR for components..."
+        echo "🔍 Generating Microsoft SBOM for $DOCKERFILE_DIR..."
         
         # Generate SBOM in SPDX 2.2 format, scanning only the relevant directory
-        # This reduces noise from other language projects in the workspace
         ./sbom-tool generate \
           -b "$DOCKERFILE_DIR" \
           -bc "$DOCKERFILE_DIR" \
@@ -179,7 +185,82 @@ jobs:
         # Copy the generated SBOM to expected location for attestation
         cp sbom-output/_manifest/spdx_2.2/manifest.spdx.json sbom.spdx.json
         
-        echo "✅ SBOM generated successfully for $DOCKERFILE_DIR"
+        echo "✅ Microsoft SBOM generated successfully"
+        
+        # Extract BuildKit SBOM from the built image and all layers
+        echo "🐳 Extracting BuildKit SBOM from container image and layers..."
+        LOCAL_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+        
+        # Try to extract BuildKit SBOM using buildx imagetools
+        docker buildx imagetools inspect "$LOCAL_TAG" --format '{{ json .SBOM }}' > sbom-buildkit/buildkit-sbom.json 2>/dev/null || {
+          echo "⚠️  BuildKit SBOM not found in image metadata, creating placeholder"
+          echo '{"note": "No BuildKit SBOM available for this image", "reason": "BuildKit SBOM generation may not be enabled"}' > sbom-buildkit/buildkit-sbom.json
+        }
+        
+        # Extract manifest to analyze layers
+        echo "🔍 Analyzing container layers..."
+        docker manifest inspect "$LOCAL_TAG" > sbom-buildkit/manifest.json 2>/dev/null || {
+          echo "⚠️  Could not extract manifest"
+          echo '{"note": "Manifest not available"}' > sbom-buildkit/manifest.json
+        }
+        
+        # Try to extract layer information and potential SBOMs from each layer
+        echo "📊 Extracting layer-specific information..."
+        docker inspect "$LOCAL_TAG" > sbom-buildkit/image-inspect.json 2>/dev/null || {
+          echo '{"note": "Image inspection not available"}' > sbom-buildkit/image-inspect.json
+        }
+        
+        # Try to get BuildKit provenance and SBOM attestations directly
+        echo "🔍 Checking for BuildKit attestations..."
+        docker buildx imagetools inspect "$LOCAL_TAG" --format '{{ json .Provenance }}' > sbom-buildkit/buildkit-provenance.json 2>/dev/null || {
+          echo '{"note": "No BuildKit provenance available"}' > sbom-buildkit/buildkit-provenance.json
+        }
+        
+        # Convert all JSON SBOMs to YAML
+        echo "🔄 Converting SBOMs from JSON to YAML..."
+        
+        # Convert Microsoft SBOM to YAML
+        yq eval '.' sbom.spdx.json > sbom-yaml/microsoft-sbom.yaml
+        
+        # Convert BuildKit SBOM to YAML
+        yq eval '.' sbom-buildkit/buildkit-sbom.json > sbom-yaml/buildkit-sbom.yaml
+        
+        # Convert manifest to YAML
+        yq eval '.' sbom-buildkit/manifest.json > sbom-yaml/manifest.yaml
+        
+        # Convert image inspection to YAML
+        yq eval '.' sbom-buildkit/image-inspect.json > sbom-yaml/image-inspect.yaml
+        
+        # Convert provenance to YAML
+        yq eval '.' sbom-buildkit/buildkit-provenance.json > sbom-yaml/buildkit-provenance.yaml
+        
+        echo "✅ All SBOMs converted to YAML format"
+        
+        # Create a summary of findings for the summary step
+        echo "📝 Creating SBOM summary..."
+        echo "SBOM Analysis Summary for ${{ matrix.containerName }}" > sbom-summary.txt
+        echo "" >> sbom-summary.txt
+        echo "Microsoft SBOM Tool Results:" >> sbom-summary.txt
+        if [ -s "sbom.spdx.json" ]; then
+          echo "✅ Microsoft SBOM generated successfully" >> sbom-summary.txt
+          PACKAGE_COUNT=$(cat sbom.spdx.json | jq -r '.packages | length' 2>/dev/null || echo "unknown")
+          echo "📦 Found $PACKAGE_COUNT packages" >> sbom-summary.txt
+        else
+          echo "❌ Microsoft SBOM generation failed" >> sbom-summary.txt
+        fi
+        echo "" >> sbom-summary.txt
+        echo "BuildKit SBOM Results:" >> sbom-summary.txt
+        if grep -q '"note"' sbom-buildkit/buildkit-sbom.json 2>/dev/null; then
+          echo "⚠️  BuildKit SBOM not available" >> sbom-summary.txt
+        else
+          echo "✅ BuildKit SBOM extracted" >> sbom-summary.txt
+        fi
+        echo "" >> sbom-summary.txt
+        echo "Container Layer Analysis:" >> sbom-summary.txt
+        LAYER_COUNT=$(docker manifest inspect "$LOCAL_TAG" 2>/dev/null | jq -r '.layers | length' || echo "unknown")
+        echo "🗂️  Container has $LAYER_COUNT layers" >> sbom-summary.txt
+        
+        echo "✅ SBOM generation and analysis completed"
 
     - name: Build and push image with attestations
       id: build-push
@@ -274,6 +355,17 @@ jobs:
         path: attestation-results/
         retention-days: 1
 
+    - name: Upload SBOM artifacts
+      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom-files-${{ matrix.containerName }}
+        path: |
+          sbom-yaml/
+          sbom-buildkit/
+          sbom-summary.txt
+        retention-days: 30
+
     - name: Package visibility information
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       run: |
@@ -312,6 +404,13 @@ jobs:
       with:
         pattern: attestation-results-*
         path: all-attestations
+        merge-multiple: true
+
+    - name: Download all SBOM artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: sbom-files-*
+        path: all-sboms
         merge-multiple: true
 
     - name: Create combined summary
@@ -396,6 +495,111 @@ jobs:
             echo "- **SLSA Compliance**: Meets SLSA v1.0 Build Level 2 requirements" >> $GITHUB_STEP_SUMMARY
           else
             echo "No attestations were generated (likely due to test failures or non-main branch)." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Add comprehensive SBOM analysis
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Software Bill of Materials (SBOM) Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -d "all-sboms" ] && [ "$(ls -A all-sboms 2>/dev/null)" ]; then
+            echo "Comprehensive SBOM analysis using multiple tools and formats:" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Process each container's SBOM data
+            for summary_file in all-sboms/sbom-summary.txt; do
+              if [ -f "$summary_file" ]; then
+                echo "### 📊 SBOM Summary" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                cat "$summary_file" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            
+            # Display Microsoft SBOM in YAML format
+            echo "### 🔧 Microsoft SBOM Tool Results (YAML)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            for yaml_file in all-sboms/sbom-yaml/microsoft-sbom.yaml; do
+              if [ -f "$yaml_file" ]; then
+                echo "<details>" >> $GITHUB_STEP_SUMMARY
+                echo "<summary>📋 Click to expand Microsoft SBOM (YAML format)</summary>" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+                cat "$yaml_file" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                echo "</details>" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "No Microsoft SBOM data available." >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            
+            # Display BuildKit SBOM in YAML format
+            echo "### 🐳 BuildKit SBOM Results (YAML)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            for buildkit_file in all-sboms/sbom-yaml/buildkit-sbom.yaml; do
+              if [ -f "$buildkit_file" ]; then
+                echo "<details>" >> $GITHUB_STEP_SUMMARY
+                echo "<summary>🐳 Click to expand BuildKit SBOM (YAML format)</summary>" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+                cat "$buildkit_file" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                echo "</details>" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "No BuildKit SBOM data available." >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            
+            # Display Container Manifest Analysis
+            echo "### 🗂️ Container Layer Analysis (YAML)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            for manifest_file in all-sboms/sbom-yaml/manifest.yaml; do
+              if [ -f "$manifest_file" ]; then
+                echo "<details>" >> $GITHUB_STEP_SUMMARY
+                echo "<summary>🗂️ Click to expand Container Manifest (YAML format)</summary>" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+                cat "$manifest_file" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                echo "</details>" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "No container manifest data available." >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            
+            # Display BuildKit Provenance
+            echo "### 🔍 BuildKit Provenance Analysis (YAML)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            for provenance_file in all-sboms/sbom-yaml/buildkit-provenance.yaml; do
+              if [ -f "$provenance_file" ]; then
+                echo "<details>" >> $GITHUB_STEP_SUMMARY
+                echo "<summary>🔍 Click to expand BuildKit Provenance (YAML format)</summary>" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+                cat "$provenance_file" >> $GITHUB_STEP_SUMMARY
+                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                echo "</details>" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "No BuildKit provenance data available." >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            
+          else
+            echo "No SBOM data available (likely due to test failures or non-main branch)." >> $GITHUB_STEP_SUMMARY
           fi
         fi
 
