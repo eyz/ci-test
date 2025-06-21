@@ -124,7 +124,10 @@ jobs:
         fi
 
     - name: Generate comprehensive SBOMs
+      id: generate-sboms
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      outputs:
+        cyclonedx_generated: ${{ steps.gen.outputs.cyclonedx_generated }}
       run: |
         echo "📋 Generating SBOMs with multiple tools..."
         
@@ -148,14 +151,15 @@ jobs:
           -pn "${{ matrix.containerName }}" \
           -pv "sha-${{ github.sha }}" \
           -ps "${{ github.repository_owner }}" \
-          -nsb "https://github.com/${{ github.repository_owner }}" \
-          -mi SPDX:2.2 \
+          -nsb "https://github.com/${{ github.repository }}" \
+          -mi SPDX:2.2,CycloneDX:1.4 \
           -m sbom-output \
           -li true \
           -pm true \
-          -lto 30 \
+          -lto 60 \
           -F true \
-          -V Warning || {
+          -df ${{ matrix.dockerfilePath }} \
+          -V Detailed || {
             echo "⚠️  SBOM generation completed with warnings (normal for simple apps)"
             # Create minimal SBOM if none generated
             if [ ! -f "sbom-output/_manifest/spdx_2.2/manifest.spdx.json" ]; then
@@ -166,7 +170,7 @@ jobs:
           "dataLicense": "CC0-1.0",
           "SPDXID": "SPDXRef-DOCUMENT",
           "name": "${{ matrix.containerName }}",
-          "documentNamespace": "https://github.com/${{ github.repository_owner }}/${{ matrix.containerName }}/sha-${{ github.sha }}",
+          "documentNamespace": "https://github.com/${{ github.repository }}/${{ matrix.containerName }}/sha-${{ github.sha }}",
           "creationInfo": {
             "created": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "creators": ["Tool: Microsoft.Sbom.Tool"]
@@ -174,15 +178,23 @@ jobs:
           "packages": [],
           "relationships": []
         }
-        EOF
+EOF
             fi
           }
         
-        # Copy for attestation
-        cp sbom-output/_manifest/spdx_2.2/manifest.spdx.json microsoft-sbom.spdx.json
+        # Copy for attestation - both formats
+        cp sbom-output/_manifest/spdx_2.2/manifest.spdx.json source-sbom.spdx.json
+        if [ -f "sbom-output/_manifest/cyclonedx_1.4/manifest.cyclonedx.json" ]; then
+          cp sbom-output/_manifest/cyclonedx_1.4/manifest.cyclonedx.json source-sbom.cyclonedx.json
+          echo "cyclonedx_generated=true" >> $GITHUB_OUTPUT
+        fi
         
-        SOURCE_PACKAGES=$(jq -r '.packages | length' microsoft-sbom.spdx.json 2>/dev/null || echo "0")
-        echo "✅ Source code SBOM: $SOURCE_PACKAGES packages"
+        SOURCE_PACKAGES=$(jq -r '.packages | length' source-sbom.spdx.json 2>/dev/null || echo "0")
+        echo "✅ Source code SBOM (SPDX): $SOURCE_PACKAGES packages"
+        if [ -f "source-sbom.cyclonedx.json" ]; then
+          CYCLONEDX_PACKAGES=$(jq -r '.components | length' source-sbom.cyclonedx.json 2>/dev/null || echo "0")
+          echo "✅ Source code SBOM (CycloneDX): $CYCLONEDX_PACKAGES components"
+        fi
         
         # Note: Container SBOM will be generated during build step
         echo "⏳ Container SBOM will be generated during image build..."
@@ -200,15 +212,14 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        # Use outputs with OCI artifact format for improved attestation storage
         outputs: type=registry,oci-mediatypes=true,compression=gzip,compression-level=6
-        # Comprehensive attestation configuration using latest features
-        provenance: mode=max  # Maximum provenance detail level
-        sbom: true  # Enable BuildKit SBOM generation for all layers
-        # Additional attestations using the attests parameter for fine-grained control
+        provenance: mode=max
+        # Generate comprehensive SBOMs with all available BuildKit generators
         attests: |
           type=sbom,generator=image
-          type=provenance,mode=max
+          type=sbom,generator=container
+          type=sbom,generator=config
+          type=sbom,generator=dockerfile
 
     - name: Verify comprehensive build outputs
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
@@ -217,21 +228,11 @@ jobs:
         echo "✅ Image built and pushed with digest: ${{ steps.build-push.outputs.digest }}"
         echo "✅ Enhanced BuildKit attestations generated:"
         echo "   → Max-level provenance attestation (mode=max)"
-        echo "   → Comprehensive SBOM for all container layers"
-        echo "   → Image-based SBOM generation"
+        echo "   → Comprehensive SBOMs for all container layers with multiple generators (image, container, config, dockerfile)"
         echo "   → OCI artifact format with enhanced metadata"
-        echo "✅ Multiple attestation types using latest BuildKit features"
-
-    - name: Generate comprehensive attestations
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
-      run: |
-        echo "🔐 Generating comprehensive security attestations for ${{ matrix.containerName }}..."
-        echo "   → Enhanced build provenance attestation (max-level detail)"
-        echo "   → Multi-layer SBOM attestation for all container layers"
-        echo "   → Image-based SBOM generation using BuildKit"
-        echo "   → OCI artifact format with enhanced metadata storage"
-        echo "   → Source-level and container-level dependency tracking"
-        echo "   (Individual attestation outputs suppressed - see combined summary)"
+        echo "✅ sbom-tool generation:"
+        echo "   → Source code analysis in SPDX and CycloneDX formats"
+        echo "   → Dockerfile analysis, license detection, and deep dependency tracking"
 
     - name: Generate GitHub artifact attestation
       id: build-attestation
@@ -246,14 +247,28 @@ jobs:
         ACTIONS_STEP_DEBUG: false
         RUNNER_DEBUG: 0
 
-    - name: Generate Microsoft SBOM attestation
-      id: microsoft-sbom-attestation
+    - name: Generate SPDX SBOM attestation
+      id: spdx-sbom-attestation
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       uses: actions/attest-sbom@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         subject-digest: ${{ steps.build-push.outputs.digest }}
-        sbom-path: microsoft-sbom.spdx.json
+        sbom-path: source-sbom.spdx.json
+        push-to-registry: true
+        show-summary: false
+      env:
+        ACTIONS_STEP_DEBUG: false
+        RUNNER_DEBUG: 0
+
+    - name: Generate CycloneDX SBOM attestation
+      id: cyclonedx-sbom-attestation
+      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main' && steps.generate-sboms.outputs.cyclonedx_generated == 'true'
+      uses: actions/attest-sbom@v2
+      with:
+        subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
+        subject-digest: ${{ steps.build-push.outputs.digest }}
+        sbom-path: source-sbom.cyclonedx.json
         push-to-registry: true
         show-summary: false
       env:
