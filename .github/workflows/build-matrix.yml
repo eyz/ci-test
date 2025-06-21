@@ -179,16 +179,16 @@ jobs:
           }
         
         # Copy for attestation - both formats
-        cp sbom-output/_manifest/spdx_2.2/manifest.spdx.json source-sbom.spdx.json
+        cp sbom-output/_manifest/spdx_2.2/manifest.spdx.json source-sbom-${{ matrix.containerName }}.spdx.json
         if [ -f "sbom-output/_manifest/cyclonedx_1.4/manifest.cyclonedx.json" ]; then
-          cp sbom-output/_manifest/cyclonedx_1.4/manifest.cyclonedx.json source-sbom.cyclonedx.json
+          cp sbom-output/_manifest/cyclonedx_1.4/manifest.cyclonedx.json source-sbom-${{ matrix.containerName }}.cyclonedx.json
           echo "cyclonedx_generated=true" >> $GITHUB_OUTPUT
         fi
         
-        SOURCE_PACKAGES=$(jq -r '.packages | length' source-sbom.spdx.json 2>/dev/null || echo "0")
+        SOURCE_PACKAGES=$(jq -r '.packages | length' source-sbom-${{ matrix.containerName }}.spdx.json 2>/dev/null || echo "0")
         echo "✅ Source code SBOM (SPDX): $SOURCE_PACKAGES packages"
-        if [ -f "source-sbom.cyclonedx.json" ]; then
-          CYCLONEDX_PACKAGES=$(jq -r '.components | length' source-sbom.cyclonedx.json 2>/dev/null || echo "0")
+        if [ -f "source-sbom-${{ matrix.containerName }}.cyclonedx.json" ]; then
+          CYCLONEDX_PACKAGES=$(jq -r '.components | length' source-sbom-${{ matrix.containerName }}.cyclonedx.json 2>/dev/null || echo "0")
           echo "✅ Source code SBOM (CycloneDX): $CYCLONEDX_PACKAGES components"
         fi
         
@@ -248,7 +248,7 @@ jobs:
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         subject-digest: ${{ steps.build-push.outputs.digest }}
-        sbom-path: source-sbom.spdx.json
+        sbom-path: source-sbom-${{ matrix.containerName }}.spdx.json
         push-to-registry: true
         show-summary: false
       env:
@@ -262,7 +262,7 @@ jobs:
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         subject-digest: ${{ steps.build-push.outputs.digest }}
-        sbom-path: source-sbom.cyclonedx.json
+        sbom-path: source-sbom-${{ matrix.containerName }}.cyclonedx.json
         push-to-registry: true
         show-summary: false
       env:
@@ -273,15 +273,15 @@ jobs:
       id: create-summary
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       run: |
-        echo "� Creating SBOM summary..."
+        echo "📝 Creating SBOM summary..."
         
         # Create summary for artifacts
-        source_packages=$(jq -r '.packages | length' source-sbom.spdx.json 2>/dev/null || echo "0")
+        source_packages=$(jq -r '.packages | length' source-sbom-${{ matrix.containerName }}.spdx.json 2>/dev/null || echo "0")
         
-        echo "SBOM Summary for ${{ matrix.containerName }}" > sbom-summary.txt
-        echo "Source dependencies: $source_packages packages" >> sbom-summary.txt
-        echo "Container layers: Included in BuildKit attestations" >> sbom-summary.txt
-        echo "BuildKit SBOM: Automatically generated and attested by Docker" >> sbom-summary.txt
+        echo "SBOM Summary for ${{ matrix.containerName }}" > sbom-summary-${{ matrix.containerName }}.txt
+        echo "Source dependencies: $source_packages packages" >> sbom-summary-${{ matrix.containerName }}.txt
+        echo "Container layers: Included in BuildKit attestations" >> sbom-summary-${{ matrix.containerName }}.txt
+        echo "BuildKit SBOM: Automatically generated and attested by Docker" >> sbom-summary-${{ matrix.containerName }}.txt
 
     - name: Store attestation results
       if: always() && env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
@@ -332,8 +332,10 @@ jobs:
       with:
         name: sbom-files-${{ matrix.containerName }}
         path: |
-          source-sbom.spdx.json
-          sbom-summary.txt
+          source-sbom-${{ matrix.containerName }}.spdx.json
+          source-sbom-${{ matrix.containerName }}.cyclonedx.json
+          sbom-summary-${{ matrix.containerName }}.txt
+        if-no-files-found: ignore
         retention-days: 30
 
     - name: Cleanup container
@@ -492,7 +494,7 @@ jobs:
                   
                   # Count source code SBOM packages
                   source_count="0"
-                  source_sbom_file="all-sboms/source-sbom.spdx.json"
+                  source_sbom_file="all-sboms/source-sbom-${container}.spdx.json"
                   if [ -f "$source_sbom_file" ]; then
                     source_count=$(cat "$source_sbom_file" | jq -r '.packages | length' 2>/dev/null || echo "0")
                   fi
@@ -517,16 +519,16 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             
             # Process each container's detailed SBOM summary from the build step
-            for summary_file in all-sboms/sbom-summary.txt; do
-              if [ -f "$summary_file" ]; then
-                echo "### � Detailed SBOM Analysis" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            if ls all-sboms/sbom-summary-*.txt >/dev/null 2>&1; then
+              echo "### 📝 Detailed SBOM Analysis" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              for summary_file in all-sboms/sbom-summary-*.txt; do
+                echo "```" >> $GITHUB_STEP_SUMMARY
                 cat "$summary_file" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                echo "```" >> $GITHUB_STEP_SUMMARY
                 echo "" >> $GITHUB_STEP_SUMMARY
-              fi
-            done
+              done
+            fi
             
           else
             echo "No SBOM data available (likely due to test failures or non-main branch)." >> $GITHUB_STEP_SUMMARY
