@@ -197,7 +197,7 @@ jobs:
         # Generate BuildKit SBOM from the locally built image
         echo "🔍 Generating BuildKit container SBOM..."
         LOCAL_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
-        docker sbom "$LOCAL_TAG" --format spdx-json --output buildkit-sbom-${{ matrix.containerName }}.spdx.json
+        docker sbom "$LOCAL_TAG" --output buildkit-sbom-${{ matrix.containerName }}.spdx.json
         
         BUILDKIT_PACKAGES=$(jq -r '.packages | length' buildkit-sbom-${{ matrix.containerName }}.spdx.json 2>/dev/null || echo "0")
         echo "✅ BuildKit SBOM (SPDX): $BUILDKIT_PACKAGES packages"
