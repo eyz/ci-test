@@ -157,7 +157,7 @@ jobs:
           -lto 60 \
           -F true \
           -df ${{ matrix.dockerfilePath }} \
-          -V Detailed || {
+          -V Normal || {
             echo "⚠️  SBOM generation completed with warnings (normal for simple apps)"
             # Create minimal SBOM if none generated
             if [ ! -f "sbom-output/_manifest/spdx_2.2/manifest.spdx.json" ]; then
