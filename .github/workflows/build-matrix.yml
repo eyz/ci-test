@@ -53,6 +53,13 @@ jobs:
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
+      with:
+        # Enable experimental features for better SBOM support
+        buildkitd-config-inline: |
+          [worker.oci]
+            enabled = true
+          [worker.containerd]
+            enabled = true
 
     - name: Log in to GitHub Container Registry
       if: github.ref == 'refs/heads/main'
@@ -123,27 +130,25 @@ jobs:
           exit 1
         fi
 
-    - name: Generate comprehensive SBOMs (Microsoft sbom-tool + BuildKit)
+    - name: Generate comprehensive SBOMs
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       run: |
-        echo "📋 Generating comprehensive SBOMs with multiple tools..."
+        echo "📋 Generating SBOMs with multiple tools..."
         
-        # Install required tools
-        echo "🔧 Installing tools..."
-        
-        # Download and install Microsoft's official sbom-tool
+        # Install Microsoft sbom-tool for source code analysis
+        echo "🔧 Installing Microsoft sbom-tool..."
         curl -Lo sbom-tool https://github.com/microsoft/sbom-tool/releases/latest/download/sbom-tool-linux-x64
         chmod +x sbom-tool
         
-        # Create output directories
-        mkdir -p sbom-output sbom-buildkit
+        # Create output directory
+        mkdir -p sbom-output
         
-        # Extract the directory path from the dockerfile path for targeted scanning
+        # Extract directory from dockerfile path
         DOCKERFILE_DIR=$(dirname "${{ matrix.dockerfilePath }}")
         
-        echo "🔍 Generating Microsoft SBOM for $DOCKERFILE_DIR..."
+        echo "🔍 Generating source code SBOM for $DOCKERFILE_DIR..."
         
-        # Generate SBOM in SPDX 2.2 format, scanning only the relevant directory
+        # Generate SBOM for source code dependencies
         ./sbom-tool generate \
           -b "$DOCKERFILE_DIR" \
           -bc "$DOCKERFILE_DIR" \
@@ -154,11 +159,9 @@ jobs:
           -mi SPDX:2.2 \
           -m sbom-output \
           -V Warning || {
-            echo "⚠️  SBOM generation completed with warnings or no packages detected"
-            echo "   This is normal for simple applications without external dependencies"
-            # Ensure the SBOM file exists even if minimal
+            echo "⚠️  SBOM generation completed with warnings (normal for simple apps)"
+            # Create minimal SBOM if none generated
             if [ ! -f "sbom-output/_manifest/spdx_2.2/manifest.spdx.json" ]; then
-              echo "📝 Creating minimal SBOM as fallback..."
               mkdir -p sbom-output/_manifest/spdx_2.2
               cat > sbom-output/_manifest/spdx_2.2/manifest.spdx.json << EOF
         {
@@ -169,7 +172,7 @@ jobs:
           "documentNamespace": "https://github.com/${{ github.repository_owner }}/${{ matrix.containerName }}/sha-${{ github.sha }}",
           "creationInfo": {
             "created": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "creators": ["Tool: Microsoft.Sbom.Tool", "Organization: ${{ github.repository_owner }}"]
+            "creators": ["Tool: Microsoft.Sbom.Tool"]
           },
           "packages": [],
           "relationships": []
@@ -178,84 +181,40 @@ jobs:
             fi
           }
         
-        # Copy the generated SBOM to expected location for attestation
-        cp sbom-output/_manifest/spdx_2.2/manifest.spdx.json sbom.spdx.json
+        # Copy for attestation
+        cp sbom-output/_manifest/spdx_2.2/manifest.spdx.json microsoft-sbom.spdx.json
         
-        echo "✅ Microsoft SBOM generated successfully"
+        SOURCE_PACKAGES=$(jq -r '.packages | length' microsoft-sbom.spdx.json 2>/dev/null || echo "0")
+        echo "✅ Source code SBOM: $SOURCE_PACKAGES packages"
         
-        # Extract BuildKit SBOM from the built image and all layers
-        echo "🐳 Extracting BuildKit SBOM from container image and layers..."
-        LOCAL_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
-        
-        # Try to extract BuildKit SBOM using buildx imagetools
-        docker buildx imagetools inspect "$LOCAL_TAG" --format '{{ json .SBOM }}' > sbom-buildkit/buildkit-sbom.json 2>/dev/null || {
-          echo "⚠️  BuildKit SBOM not found in image metadata, creating placeholder"
-          echo '{"note": "No BuildKit SBOM available for this image", "reason": "BuildKit SBOM generation may not be enabled"}' > sbom-buildkit/buildkit-sbom.json
-        }
-        
-        # Extract manifest to analyze layers
-        echo "🔍 Analyzing container layers..."
-        docker manifest inspect "$LOCAL_TAG" > sbom-buildkit/manifest.json 2>/dev/null || {
-          echo "⚠️  Could not extract manifest"
-          echo '{"note": "Manifest not available"}' > sbom-buildkit/manifest.json
-        }
-        
-        # Try to extract layer information and potential SBOMs from each layer
-        echo "📊 Extracting layer-specific information..."
-        docker inspect "$LOCAL_TAG" > sbom-buildkit/image-inspect.json 2>/dev/null || {
-          echo '{"note": "Image inspection not available"}' > sbom-buildkit/image-inspect.json
-        }
-        
-        # Try to get BuildKit provenance and SBOM attestations directly
-        echo "🔍 Checking for BuildKit attestations..."
-        docker buildx imagetools inspect "$LOCAL_TAG" --format '{{ json .Provenance }}' > sbom-buildkit/buildkit-provenance.json 2>/dev/null || {
-          echo '{"note": "No BuildKit provenance available"}' > sbom-buildkit/buildkit-provenance.json
-        }
-        
-        echo "✅ SBOM generation and analysis completed"
-        
-        # Create a summary of findings for the summary step
-        echo "📝 Creating SBOM summary..."
-        echo "SBOM Analysis Summary for ${{ matrix.containerName }}" > sbom-summary.txt
-        echo "" >> sbom-summary.txt
-        echo "Microsoft SBOM Tool Results:" >> sbom-summary.txt
-        if [ -s "sbom.spdx.json" ]; then
-          echo "✅ Microsoft SBOM generated successfully" >> sbom-summary.txt
-          PACKAGE_COUNT=$(cat sbom.spdx.json | jq -r '.packages | length' 2>/dev/null || echo "unknown")
-          echo "📦 Found $PACKAGE_COUNT packages" >> sbom-summary.txt
-        else
-          echo "❌ Microsoft SBOM generation failed" >> sbom-summary.txt
-        fi
-        echo "" >> sbom-summary.txt
-        echo "BuildKit SBOM Results:" >> sbom-summary.txt
-        if grep -q '"note"' sbom-buildkit/buildkit-sbom.json 2>/dev/null; then
-          echo "⚠️  BuildKit SBOM not available" >> sbom-summary.txt
-        else
-          echo "✅ BuildKit SBOM extracted" >> sbom-summary.txt
-        fi
-        echo "" >> sbom-summary.txt
-        echo "Container Layer Analysis:" >> sbom-summary.txt
-        LAYER_COUNT=$(docker manifest inspect "$LOCAL_TAG" 2>/dev/null | jq -r '.layers | length' || echo "unknown")
-        echo "🗂️  Container has $LAYER_COUNT layers" >> sbom-summary.txt
-        
-        echo "✅ SBOM generation and analysis completed"
+        # Note: Container SBOM will be generated during build step
+        echo "⏳ Container SBOM will be generated during image build..."
 
     - name: Build and push image with attestations
       id: build-push
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ${{ matrix.dockerfilePath }}
-        platforms: linux/amd64
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        # Add attestations for supply chain security
-        provenance: true
-        sbom: true
+      run: |
+        echo "🔨 Building and pushing image with comprehensive attestations..."
+        
+        # Build with both push and SBOM generation
+        docker buildx build \
+          --platform linux/amd64 \
+          --file "${{ matrix.dockerfilePath }}" \
+          --push \
+          --provenance=true \
+          --sbom=true \
+          --cache-from type=gha \
+          --cache-to type=gha,mode=max \
+          --output type=image,push=true \
+          --output type=sbom,dest=./buildkit-sbom.spdx.json \
+          $(echo "${{ steps.meta.outputs.tags }}" | sed 's/^/--tag /') \
+          $(echo "${{ steps.meta.outputs.labels }}" | sed 's/^/--label /') \
+          .
+          
+        # Capture the image digest for attestations
+        IMAGE_DIGEST=$(docker buildx imagetools inspect "$(echo "${{ steps.meta.outputs.tags }}" | head -n1)" --format '{{ .Manifest.Digest }}')
+        echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> $GITHUB_ENV
+        echo "✅ Image built and pushed with digest: $IMAGE_DIGEST"
 
     - name: Generate attestations
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
@@ -271,7 +230,7 @@ jobs:
       uses: actions/attest-build-provenance@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
-        subject-digest: ${{ steps.build-push.outputs.digest }}
+        subject-digest: ${{ env.IMAGE_DIGEST }}
         push-to-registry: true
         show-summary: false
       env:
@@ -284,26 +243,42 @@ jobs:
       uses: actions/attest-sbom@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
-        subject-digest: ${{ steps.build-push.outputs.digest }}
-        sbom-path: sbom.spdx.json
+        subject-digest: ${{ env.IMAGE_DIGEST }}
+        sbom-path: microsoft-sbom.spdx.json
         push-to-registry: true
         show-summary: false
       env:
         ACTIONS_STEP_DEBUG: false
         RUNNER_DEBUG: 0
 
-    - name: Generate BuildKit SBOM attestation
-      id: buildkit-sbom-attestation
+    - name: Validate and attest SBOMs
+      id: validate-sboms
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       run: |
-        # Check if BuildKit SBOM contains actual data (not just a placeholder)
-        if [ -f "sbom-buildkit/buildkit-sbom.json" ] && ! grep -q '"note"' sbom-buildkit/buildkit-sbom.json 2>/dev/null; then
-          echo "✅ BuildKit SBOM contains real data, generating attestation..."
-          echo "BUILDKIT_SBOM_AVAILABLE=true" >> $GITHUB_ENV
+        echo "🔍 Validating generated SBOMs..."
+        
+        # Check BuildKit SBOM
+        if [ -f "buildkit-sbom.spdx.json" ]; then
+          if jq -e '.spdxVersion and .packages and (.packages | length > 0)' buildkit-sbom.spdx.json >/dev/null 2>&1; then
+            container_packages=$(jq -r '.packages | length' buildkit-sbom.spdx.json)
+            echo "✅ Container SBOM: $container_packages packages (includes all layers)"
+            echo "BUILDKIT_SBOM_AVAILABLE=true" >> $GITHUB_ENV
+          else
+            echo "⚠️  Container SBOM has no packages (simple app)"
+            echo "BUILDKIT_SBOM_AVAILABLE=false" >> $GITHUB_ENV
+          fi
         else
-          echo "⚠️  BuildKit SBOM is placeholder or empty, skipping attestation"
+          echo "⚠️  No container SBOM generated"
           echo "BUILDKIT_SBOM_AVAILABLE=false" >> $GITHUB_ENV
         fi
+        
+        # Create summary for artifacts
+        source_packages=$(jq -r '.packages | length' microsoft-sbom.spdx.json 2>/dev/null || echo "0")
+        container_packages=${container_packages:-0}
+        
+        echo "SBOM Summary for ${{ matrix.containerName }}" > sbom-summary.txt
+        echo "Source dependencies: $source_packages packages" >> sbom-summary.txt
+        echo "Container layers: $container_packages packages" >> sbom-summary.txt
 
     - name: Attest BuildKit SBOM
       id: buildkit-sbom-attest
@@ -311,8 +286,8 @@ jobs:
       uses: actions/attest-sbom@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
-        subject-digest: ${{ steps.build-push.outputs.digest }}
-        sbom-path: sbom-buildkit/buildkit-sbom.json
+        subject-digest: ${{ env.IMAGE_DIGEST }}
+        sbom-path: buildkit-sbom.spdx.json
         push-to-registry: true
         show-summary: false
       env:
@@ -350,7 +325,7 @@ jobs:
           buildkit_sbom_status="⚠️  No Data"
         fi
         
-        echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},${{ steps.build-push.outputs.digest }},$build_status,$microsoft_sbom_status,$buildkit_sbom_status,$build_url,$microsoft_sbom_url,$buildkit_sbom_url" > attestation-results/${{ matrix.containerName }}.csv
+        echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},${{ env.IMAGE_DIGEST }},$build_status,$microsoft_sbom_status,$buildkit_sbom_status,$build_url,$microsoft_sbom_url,$buildkit_sbom_url" > attestation-results/${{ matrix.containerName }}.csv
         echo "✅ Attestation results stored for ${{ matrix.containerName }}"
 
     - name: Upload test results
@@ -375,9 +350,9 @@ jobs:
       with:
         name: sbom-files-${{ matrix.containerName }}
         path: |
-          sbom-buildkit/
+          microsoft-sbom.spdx.json
+          buildkit-sbom.spdx.json
           sbom-summary.txt
-          sbom.spdx.json
         retention-days: 30
 
     - name: Cleanup container
@@ -497,10 +472,12 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "All published images include comprehensive supply chain security attestations:" >> $GITHUB_STEP_SUMMARY
             echo "- **Build Provenance**: GitHub artifact attestations establishing build source and environment" >> $GITHUB_STEP_SUMMARY
-            echo "- **Microsoft SBOM**: Software Bill of Materials attestations in SPDX format from Microsoft sbom-tool" >> $GITHUB_STEP_SUMMARY
-            echo "- **BuildKit SBOM**: Software Bill of Materials from Docker BuildKit (when available)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Source SBOM**: Software Bill of Materials for source code dependencies (Microsoft sbom-tool)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Container SBOM**: Software Bill of Materials for all container layers (BuildKit)" >> $GITHUB_STEP_SUMMARY
             echo "- **Docker Attestations**: Native Docker BuildKit provenance and SBOM" >> $GITHUB_STEP_SUMMARY
             echo "- **SLSA Compliance**: Meets SLSA v1.0 Build Level 2 requirements" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> **Note**: Container SBOM attestations include all layers and are only generated when the container has package dependencies. Simple applications may only have source SBOMs." >> $GITHUB_STEP_SUMMARY
           else
             echo "No attestations were generated (likely due to test failures or non-main branch)." >> $GITHUB_STEP_SUMMARY
           fi
@@ -511,12 +488,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -d "all-sboms" ] && [ "$(ls -A all-sboms 2>/dev/null)" ]; then
-            echo "Comprehensive SBOM analysis using multiple tools and formats:" >> $GITHUB_STEP_SUMMARY
+            echo "Comprehensive SBOM analysis covering both source dependencies and container layers:" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
             # Create a summary table of SBOM counts by container
-            echo "| Container | Microsoft SBOM | BuildKit SBOM | Container Layers | Status |" >> $GITHUB_STEP_SUMMARY
-            echo "|-----------|----------------|---------------|------------------|--------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Container | Source Dependencies | Container Layers | App Type | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|---------------------|------------------|----------|--------|" >> $GITHUB_STEP_SUMMARY
             
             # Process each container's SBOM data
             for result_file in all-results/*.csv; do
@@ -524,46 +501,30 @@ jobs:
                 IFS=',' read -r container dockerfile_path status_code response_body < "$result_file"
                 if [ "$status_code" -eq 200 ]; then
                   
-                  # Count Microsoft SBOM packages
-                  microsoft_count="0"
-                  microsoft_json_file="all-sboms/sbom.spdx.json"
-                  if [ -f "$microsoft_json_file" ]; then
-                    microsoft_count=$(cat "$microsoft_json_file" | jq -r '.packages | length' 2>/dev/null || echo "0")
+                  # Count source code SBOM packages
+                  source_count="0"
+                  microsoft_sbom_file="all-sboms/microsoft-sbom.spdx.json"
+                  if [ -f "$microsoft_sbom_file" ]; then
+                    source_count=$(cat "$microsoft_sbom_file" | jq -r '.packages | length' 2>/dev/null || echo "0")
                   fi
                   
-                  # Check BuildKit SBOM status
-                  buildkit_status="Not Available"
-                  buildkit_json_file="all-sboms/sbom-buildkit/buildkit-sbom.json"
-                  if [ -f "$buildkit_json_file" ]; then
-                    if grep -q '"note"' "$buildkit_json_file" 2>/dev/null; then
-                      buildkit_status="Placeholder"
-                    else
-                      # Try to count BuildKit SBOM components (structure may vary)
-                      buildkit_count=$(cat "$buildkit_json_file" | jq -r 'if .packages then .packages | length elif .predicate.buildInfo.sbom.packages then .predicate.buildInfo.sbom.packages | length else "0" end' 2>/dev/null || echo "Available")
-                      if [[ "$buildkit_count" =~ ^[0-9]+$ ]]; then
-                        buildkit_status="$buildkit_count packages"
-                      else
-                        buildkit_status="Available"
-                      fi
-                    fi
+                  # Count container SBOM packages
+                  container_count="0"
+                  buildkit_sbom_file="all-sboms/buildkit-sbom.spdx.json"
+                  if [ -f "$buildkit_sbom_file" ]; then
+                    container_count=$(cat "$buildkit_sbom_file" | jq -r '.packages | length' 2>/dev/null || echo "0")
                   fi
                   
-                  # Count container layers
-                  layer_count="unknown"
-                  manifest_file="all-sboms/sbom-buildkit/manifest.json"
-                  if [ -f "$manifest_file" ]; then
-                    layer_count=$(cat "$manifest_file" | jq -r '.layers | length' 2>/dev/null || echo "unknown")
-                  fi
-                  
-                  # Determine overall status
-                  overall_status="✅ Complete"
-                  if [ "$microsoft_count" = "0" ] && [ "$buildkit_status" = "Not Available" ]; then
+                  # Determine status
+                  if [ "$source_count" -gt 0 ] && [ "$container_count" -gt 0 ]; then
+                    overall_status="✅ Complete"
+                  elif [ "$source_count" -gt 0 ] || [ "$container_count" -gt 0 ]; then
+                    overall_status="📋 Partial"
+                  else
                     overall_status="⚠️  Minimal"
-                  elif [ "$buildkit_status" = "Not Available" ]; then
-                    overall_status="📋 Microsoft Only"
                   fi
                   
-                  echo "| **$container** | $microsoft_count packages | $buildkit_status | $layer_count layers | $overall_status |" >> $GITHUB_STEP_SUMMARY
+                  echo "| **$container** | $source_count packages | $container_count packages | Simple App | $overall_status |" >> $GITHUB_STEP_SUMMARY
                 fi
               fi
             done
