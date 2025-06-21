@@ -98,6 +98,7 @@ jobs:
         timeout 30 bash -c 'until curl -f http://localhost:8080/ > /dev/null 2>&1; do sleep 2; done' || true
 
     - name: Test endpoint with cURL
+      id: test-endpoint
       run: |
         # Capture both response body and status code in one request
         response=$(curl -s -w "%{http_code}" http://localhost:8080/)
@@ -107,7 +108,7 @@ jobs:
         response_body="${response%???}"
 
         # Get only the first line and strip newlines to prevent markdown table formatting issues
-        response_body_clean=$(echo "$response_body" | head -n 1 | tr -d '\n\r')
+        response_body_clean=$(echo "$response_body" | head -n 1 | tr -d '\r\n')
 
         echo "HTTP response code: $response_code"
         echo "HTTP response body: $response_body_clean"
@@ -118,16 +119,18 @@ jobs:
 
         if [ "$response_code" -eq 200 ]; then
           echo "✅ Test passed: Received HTTP 200 from /"
-          echo "TEST_PASSED=true" >> $GITHUB_ENV
+          echo "test_passed=true" >> $GITHUB_OUTPUT
         else
           echo "❌ Test failed: Expected HTTP 200, got $response_code"
-          echo "TEST_PASSED=false" >> $GITHUB_ENV
+          echo "test_passed=false" >> $GITHUB_OUTPUT
           exit 1
         fi
 
     - name: Generate comprehensive SBOMs
       id: generate-sboms
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
+      outputs:
+        cyclonedx_generated: "false"
       run: |
         echo "📋 Generating SBOMs with multiple tools..."
         
@@ -194,33 +197,34 @@ jobs:
           echo "✅ Source code SBOM (CycloneDX): $CYCLONEDX_PACKAGES components"
         fi
         
-        # Note: Container SBOM will be generated during build step
-        echo "⏳ Container SBOM will be generated during image build..."
+        # Generate BuildKit SBOM from the locally built image
+        echo "🔍 Generating BuildKit container SBOM..."
+        LOCAL_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+        docker sbom "$LOCAL_TAG" --format spdx-json --output buildkit-sbom-${{ matrix.containerName }}.spdx.json
+        
+        BUILDKIT_PACKAGES=$(jq -r '.packages | length' buildkit-sbom-${{ matrix.containerName }}.spdx.json 2>/dev/null || echo "0")
+        echo "✅ BuildKit SBOM (SPDX): $BUILDKIT_PACKAGES packages"
 
     - name: Build and push image with comprehensive attestations
       id: build-push
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
       uses: docker/build-push-action@v6
-      env:
-        DOCKER_BUILDKIT_INLINE_BUILDINFO: 0
       with:
         context: .
         file: ${{ matrix.dockerfilePath }}
         platforms: linux/amd64
         push: true
+        load: false
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
         outputs: type=registry,oci-mediatypes=true,compression=gzip,compression-level=6
-        provenance: false
-        sbom: false
-        attest: |
-          type=provenance,mode=max
-          type=sbom,generator=docker/default,output=buildkit-sbom-${{ matrix.containerName }}.spdx.json
+        provenance: true
+        sbom: true
 
     - name: Verify comprehensive build outputs
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
       run: |
         echo "🔍 Verifying comprehensive build outputs..."
         echo "✅ Image built and pushed with digest: ${{ steps.build-push.outputs.digest }}"
@@ -234,7 +238,7 @@ jobs:
 
     - name: Generate GitHub artifact attestation
       id: build-attestation
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
       uses: actions/attest-build-provenance@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
@@ -247,7 +251,7 @@ jobs:
 
     - name: Generate SPDX SBOM attestation
       id: spdx-sbom-attestation
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
       uses: actions/attest-sbom@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
@@ -261,7 +265,7 @@ jobs:
 
     - name: Generate BuildKit SBOM attestation
       id: buildkit-sbom-attestation
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
       uses: actions/attest-sbom@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
@@ -275,7 +279,7 @@ jobs:
 
     - name: Create SBOM summary
       id: create-summary
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
       run: |
         echo "📝 Creating SBOM summary..."
         
@@ -288,7 +292,7 @@ jobs:
         echo "BuildKit SBOM: Automatically generated and attested by Docker" >> sbom-summary-${{ matrix.containerName }}.txt
 
     - name: Store attestation results
-      if: always() && env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      if: always() && steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
       run: |
         echo "📝 Storing attestation results for summary..."
         mkdir -p attestation-results
@@ -328,7 +332,7 @@ jobs:
         retention-days: 1
 
     - name: Upload attestation results
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
       uses: actions/upload-artifact@v4
       with:
         name: attestation-results-${{ matrix.containerName }}
@@ -336,7 +340,7 @@ jobs:
         retention-days: 1
 
     - name: Upload SBOM artifacts
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
       uses: actions/upload-artifact@v4
       with:
         name: sbom-files-${{ matrix.containerName }}
