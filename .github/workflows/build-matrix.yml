@@ -129,8 +129,6 @@ jobs:
     - name: Generate comprehensive SBOMs
       id: generate-sboms
       if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
-      outputs:
-        cyclonedx_generated: "false"
       run: |
         echo "📋 Generating SBOMs with multiple tools..."
         
@@ -187,7 +185,6 @@ jobs:
         cp sbom-output/_manifest/spdx_2.2/manifest.spdx.json source-sbom-${{ matrix.containerName }}.spdx.json
         if [ -f "sbom-output/_manifest/cyclonedx_1.5/manifest.cyclonedx.json" ]; then
           cp sbom-output/_manifest/cyclonedx_1.5/manifest.cyclonedx.json source-sbom-${{ matrix.containerName }}.cyclonedx.json
-          echo "cyclonedx_generated=true" >> $GITHUB_OUTPUT
         fi
         
         SOURCE_PACKAGES=$(jq -r '.packages | length' source-sbom-${{ matrix.containerName }}.spdx.json 2>/dev/null || echo "0")
