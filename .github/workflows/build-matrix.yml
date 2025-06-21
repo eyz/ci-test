@@ -145,6 +145,8 @@ jobs:
         echo "🔍 Generating source code SBOM for $DOCKERFILE_DIR..."
         
         # Generate SBOM for source code dependencies with all advanced features
+        # Note: sbom-tool may not detect packages for all languages (e.g. Go, Elixir),
+        # in which case a minimal SBOM is generated.
         ./sbom-tool generate \
           -b "$DOCKERFILE_DIR" \
           -bc "$DOCKERFILE_DIR" \
@@ -152,7 +154,7 @@ jobs:
           -pv "sha-${{ github.sha }}" \
           -ps "${{ github.repository_owner }}" \
           -nsb "https://github.com/${{ github.repository }}" \
-          -mi SPDX:2.2,CycloneDX:1.4 \
+          -mi SPDX:2.2,CycloneDX:1.5 \
           -m sbom-output \
           -li true \
           -pm true \
@@ -180,8 +182,8 @@ jobs:
         
         # Copy for attestation - both formats
         cp sbom-output/_manifest/spdx_2.2/manifest.spdx.json source-sbom-${{ matrix.containerName }}.spdx.json
-        if [ -f "sbom-output/_manifest/cyclonedx_1.4/manifest.cyclonedx.json" ]; then
-          cp sbom-output/_manifest/cyclonedx_1.4/manifest.cyclonedx.json source-sbom-${{ matrix.containerName }}.cyclonedx.json
+        if [ -f "sbom-output/_manifest/cyclonedx_1.5/manifest.cyclonedx.json" ]; then
+          cp sbom-output/_manifest/cyclonedx_1.5/manifest.cyclonedx.json source-sbom-${{ matrix.containerName }}.cyclonedx.json
           echo "cyclonedx_generated=true" >> $GITHUB_OUTPUT
         fi
         
