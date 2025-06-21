@@ -131,16 +131,12 @@ jobs:
         # Install required tools
         echo "🔧 Installing tools..."
         
-        # Install yq for JSON to YAML conversion
-        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-        sudo chmod +x /usr/local/bin/yq
-        
         # Download and install Microsoft's official sbom-tool
         curl -Lo sbom-tool https://github.com/microsoft/sbom-tool/releases/latest/download/sbom-tool-linux-x64
         chmod +x sbom-tool
         
         # Create output directories
-        mkdir -p sbom-output sbom-buildkit sbom-yaml
+        mkdir -p sbom-output sbom-buildkit
         
         # Extract the directory path from the dockerfile path for targeted scanning
         DOCKERFILE_DIR=$(dirname "${{ matrix.dockerfilePath }}")
@@ -216,25 +212,7 @@ jobs:
           echo '{"note": "No BuildKit provenance available"}' > sbom-buildkit/buildkit-provenance.json
         }
         
-        # Convert all JSON SBOMs to YAML
-        echo "🔄 Converting SBOMs from JSON to YAML..."
-        
-        # Convert Microsoft SBOM to YAML
-        yq eval '.' sbom.spdx.json > sbom-yaml/microsoft-sbom.yaml
-        
-        # Convert BuildKit SBOM to YAML
-        yq eval '.' sbom-buildkit/buildkit-sbom.json > sbom-yaml/buildkit-sbom.yaml
-        
-        # Convert manifest to YAML
-        yq eval '.' sbom-buildkit/manifest.json > sbom-yaml/manifest.yaml
-        
-        # Convert image inspection to YAML
-        yq eval '.' sbom-buildkit/image-inspect.json > sbom-yaml/image-inspect.yaml
-        
-        # Convert provenance to YAML
-        yq eval '.' sbom-buildkit/buildkit-provenance.json > sbom-yaml/buildkit-provenance.yaml
-        
-        echo "✅ All SBOMs converted to YAML format"
+        echo "✅ SBOM generation and analysis completed"
         
         # Create a summary of findings for the summary step
         echo "📝 Creating SBOM summary..."
@@ -300,14 +278,41 @@ jobs:
         ACTIONS_STEP_DEBUG: false
         RUNNER_DEBUG: 0
 
-    - name: Generate SBOM attestation
-      id: sbom-attestation
+    - name: Generate Microsoft SBOM attestation
+      id: microsoft-sbom-attestation
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
       uses: actions/attest-sbom@v2
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         subject-digest: ${{ steps.build-push.outputs.digest }}
         sbom-path: sbom.spdx.json
+        push-to-registry: true
+        show-summary: false
+      env:
+        ACTIONS_STEP_DEBUG: false
+        RUNNER_DEBUG: 0
+
+    - name: Generate BuildKit SBOM attestation
+      id: buildkit-sbom-attestation
+      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
+      run: |
+        # Check if BuildKit SBOM contains actual data (not just a placeholder)
+        if [ -f "sbom-buildkit/buildkit-sbom.json" ] && ! grep -q '"note"' sbom-buildkit/buildkit-sbom.json 2>/dev/null; then
+          echo "✅ BuildKit SBOM contains real data, generating attestation..."
+          echo "BUILDKIT_SBOM_AVAILABLE=true" >> $GITHUB_ENV
+        else
+          echo "⚠️  BuildKit SBOM is placeholder or empty, skipping attestation"
+          echo "BUILDKIT_SBOM_AVAILABLE=false" >> $GITHUB_ENV
+        fi
+
+    - name: Attest BuildKit SBOM
+      id: buildkit-sbom-attest
+      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main' && env.BUILDKIT_SBOM_AVAILABLE == 'true'
+      uses: actions/attest-sbom@v2
+      with:
+        subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
+        subject-digest: ${{ steps.build-push.outputs.digest }}
+        sbom-path: sbom-buildkit/buildkit-sbom.json
         push-to-registry: true
         show-summary: false
       env:
@@ -322,21 +327,30 @@ jobs:
         
         # Check if attestations were successful and capture URLs
         build_status="❌ Failed"
-        sbom_status="❌ Failed"
+        microsoft_sbom_status="❌ Failed"
+        buildkit_sbom_status="❌ Not Available"
         build_url=""
-        sbom_url=""
+        microsoft_sbom_url=""
+        buildkit_sbom_url=""
         
         if [[ "${{ steps.build-attestation.outcome }}" == "success" ]]; then
           build_status="✅ Signed"
           build_url="${{ steps.build-attestation.outputs.attestation-url }}"
         fi
         
-        if [[ "${{ steps.sbom-attestation.outcome }}" == "success" ]]; then
-          sbom_status="✅ Signed"
-          sbom_url="${{ steps.sbom-attestation.outputs.attestation-url }}"
+        if [[ "${{ steps.microsoft-sbom-attestation.outcome }}" == "success" ]]; then
+          microsoft_sbom_status="✅ Signed"
+          microsoft_sbom_url="${{ steps.microsoft-sbom-attestation.outputs.attestation-url }}"
         fi
         
-        echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},${{ steps.build-push.outputs.digest }},$build_status,$sbom_status,$build_url,$sbom_url" > attestation-results/${{ matrix.containerName }}.csv
+        if [[ "${{ steps.buildkit-sbom-attest.outcome }}" == "success" ]]; then
+          buildkit_sbom_status="✅ Signed"
+          buildkit_sbom_url="${{ steps.buildkit-sbom-attest.outputs.attestation-url }}"
+        elif [[ "$BUILDKIT_SBOM_AVAILABLE" == "false" ]]; then
+          buildkit_sbom_status="⚠️  No Data"
+        fi
+        
+        echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},${{ steps.build-push.outputs.digest }},$build_status,$microsoft_sbom_status,$buildkit_sbom_status,$build_url,$microsoft_sbom_url,$buildkit_sbom_url" > attestation-results/${{ matrix.containerName }}.csv
         echo "✅ Attestation results stored for ${{ matrix.containerName }}"
 
     - name: Upload test results
@@ -361,24 +375,10 @@ jobs:
       with:
         name: sbom-files-${{ matrix.containerName }}
         path: |
-          sbom-yaml/
           sbom-buildkit/
           sbom-summary.txt
+          sbom.spdx.json
         retention-days: 30
-
-    - name: Package visibility information
-      if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
-      run: |
-        echo "📦 Container package published: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}"
-        echo "🔒 Package is currently private by default"
-        echo ""
-        echo "To make it public:"
-        echo "1. Go to https://github.com/${{ github.repository_owner }}?tab=packages"
-        echo "2. Click on '${{ matrix.containerName }}' package"
-        echo "3. Go to Package settings (⚙️) → Change visibility → Public"
-        echo ""
-        echo "Or use the GitHub CLI:"
-        echo "gh api -X PATCH /user/packages/container/${{ matrix.containerName }} -f visibility=public"
 
     - name: Cleanup container
       if: always()
@@ -458,12 +458,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -d "all-attestations" ] && [ "$(ls -A all-attestations 2>/dev/null)" ]; then
-            echo "| Container | Dockerfile | Image Digest | Build Provenance | SBOM Attestation | Verification |" >> $GITHUB_STEP_SUMMARY
-            echo "|-----------|------------|-------------|------------------|------------------|--------------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Container | Dockerfile | Image Digest | Build Provenance | Microsoft SBOM | BuildKit SBOM | Verification |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|------------|-------------|------------------|----------------|---------------|--------------|" >> $GITHUB_STEP_SUMMARY
             
             for file in all-attestations/*.csv; do
               if [ -f "$file" ]; then
-                IFS=',' read -r container dockerfile_path digest build_status sbom_status build_url sbom_url < "$file"
+                IFS=',' read -r container dockerfile_path digest build_status microsoft_sbom_status buildkit_sbom_status build_url microsoft_sbom_url buildkit_sbom_url < "$file"
                 short_digest="${digest#sha256:}"
                 short_digest="${short_digest:0:12}"
                 
@@ -474,14 +474,21 @@ jobs:
                   build_display="$build_status"
                 fi
                 
-                # Create hyperlinked status for SBOM
-                if [[ "$sbom_status" == "✅ Signed" && -n "$sbom_url" ]]; then
-                  sbom_display="[✅ Signed]($sbom_url)"
+                # Create hyperlinked status for Microsoft SBOM
+                if [[ "$microsoft_sbom_status" == "✅ Signed" && -n "$microsoft_sbom_url" ]]; then
+                  microsoft_sbom_display="[✅ Signed]($microsoft_sbom_url)"
                 else
-                  sbom_display="$sbom_status"
+                  microsoft_sbom_display="$microsoft_sbom_status"
                 fi
                 
-                echo "| **$container** | \`$dockerfile_path\` | \`$short_digest...\` | $build_display | $sbom_display | \`gh attestation verify oci://ghcr.io/${{ github.repository_owner }}/$container:latest\` |" >> $GITHUB_STEP_SUMMARY
+                # Create hyperlinked status for BuildKit SBOM
+                if [[ "$buildkit_sbom_status" == "✅ Signed" && -n "$buildkit_sbom_url" ]]; then
+                  buildkit_sbom_display="[✅ Signed]($buildkit_sbom_url)"
+                else
+                  buildkit_sbom_display="$buildkit_sbom_status"
+                fi
+                
+                echo "| **$container** | \`$dockerfile_path\` | \`$short_digest...\` | $build_display | $microsoft_sbom_display | $buildkit_sbom_display | \`gh attestation verify oci://ghcr.io/${{ github.repository_owner }}/$container:latest\` |" >> $GITHUB_STEP_SUMMARY
               fi
             done
             
@@ -490,7 +497,8 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "All published images include comprehensive supply chain security attestations:" >> $GITHUB_STEP_SUMMARY
             echo "- **Build Provenance**: GitHub artifact attestations establishing build source and environment" >> $GITHUB_STEP_SUMMARY
-            echo "- **SBOM**: Software Bill of Materials attestations in SPDX format" >> $GITHUB_STEP_SUMMARY
+            echo "- **Microsoft SBOM**: Software Bill of Materials attestations in SPDX format from Microsoft sbom-tool" >> $GITHUB_STEP_SUMMARY
+            echo "- **BuildKit SBOM**: Software Bill of Materials from Docker BuildKit (when available)" >> $GITHUB_STEP_SUMMARY
             echo "- **Docker Attestations**: Native Docker BuildKit provenance and SBOM" >> $GITHUB_STEP_SUMMARY
             echo "- **SLSA Compliance**: Meets SLSA v1.0 Build Level 2 requirements" >> $GITHUB_STEP_SUMMARY
           else
@@ -506,94 +514,70 @@ jobs:
             echo "Comprehensive SBOM analysis using multiple tools and formats:" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
+            # Create a summary table of SBOM counts by container
+            echo "| Container | Microsoft SBOM | BuildKit SBOM | Container Layers | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|----------------|---------------|------------------|--------|" >> $GITHUB_STEP_SUMMARY
+            
             # Process each container's SBOM data
+            for result_file in all-results/*.csv; do
+              if [ -f "$result_file" ]; then
+                IFS=',' read -r container dockerfile_path status_code response_body < "$result_file"
+                if [ "$status_code" -eq 200 ]; then
+                  
+                  # Count Microsoft SBOM packages
+                  microsoft_count="0"
+                  microsoft_json_file="all-sboms/sbom.spdx.json"
+                  if [ -f "$microsoft_json_file" ]; then
+                    microsoft_count=$(cat "$microsoft_json_file" | jq -r '.packages | length' 2>/dev/null || echo "0")
+                  fi
+                  
+                  # Check BuildKit SBOM status
+                  buildkit_status="Not Available"
+                  buildkit_json_file="all-sboms/sbom-buildkit/buildkit-sbom.json"
+                  if [ -f "$buildkit_json_file" ]; then
+                    if grep -q '"note"' "$buildkit_json_file" 2>/dev/null; then
+                      buildkit_status="Placeholder"
+                    else
+                      # Try to count BuildKit SBOM components (structure may vary)
+                      buildkit_count=$(cat "$buildkit_json_file" | jq -r 'if .packages then .packages | length elif .predicate.buildInfo.sbom.packages then .predicate.buildInfo.sbom.packages | length else "0" end' 2>/dev/null || echo "Available")
+                      if [[ "$buildkit_count" =~ ^[0-9]+$ ]]; then
+                        buildkit_status="$buildkit_count packages"
+                      else
+                        buildkit_status="Available"
+                      fi
+                    fi
+                  fi
+                  
+                  # Count container layers
+                  layer_count="unknown"
+                  manifest_file="all-sboms/sbom-buildkit/manifest.json"
+                  if [ -f "$manifest_file" ]; then
+                    layer_count=$(cat "$manifest_file" | jq -r '.layers | length' 2>/dev/null || echo "unknown")
+                  fi
+                  
+                  # Determine overall status
+                  overall_status="✅ Complete"
+                  if [ "$microsoft_count" = "0" ] && [ "$buildkit_status" = "Not Available" ]; then
+                    overall_status="⚠️  Minimal"
+                  elif [ "$buildkit_status" = "Not Available" ]; then
+                    overall_status="📋 Microsoft Only"
+                  fi
+                  
+                  echo "| **$container** | $microsoft_count packages | $buildkit_status | $layer_count layers | $overall_status |" >> $GITHUB_STEP_SUMMARY
+                fi
+              fi
+            done
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Process each container's detailed SBOM summary from the build step
             for summary_file in all-sboms/sbom-summary.txt; do
               if [ -f "$summary_file" ]; then
-                echo "### 📊 SBOM Summary" >> $GITHUB_STEP_SUMMARY
+                echo "### � Detailed SBOM Analysis" >> $GITHUB_STEP_SUMMARY
                 echo "" >> $GITHUB_STEP_SUMMARY
                 echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
                 cat "$summary_file" >> $GITHUB_STEP_SUMMARY
                 echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-              fi
-            done
-            
-            # Display Microsoft SBOM in YAML format
-            echo "### 🔧 Microsoft SBOM Tool Results (YAML)" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            for yaml_file in all-sboms/sbom-yaml/microsoft-sbom.yaml; do
-              if [ -f "$yaml_file" ]; then
-                echo "<details>" >> $GITHUB_STEP_SUMMARY
-                echo "<summary>📋 Click to expand Microsoft SBOM (YAML format)</summary>" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
-                cat "$yaml_file" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-                echo "</details>" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-              else
-                echo "No Microsoft SBOM data available." >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-              fi
-            done
-            
-            # Display BuildKit SBOM in YAML format
-            echo "### 🐳 BuildKit SBOM Results (YAML)" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            for buildkit_file in all-sboms/sbom-yaml/buildkit-sbom.yaml; do
-              if [ -f "$buildkit_file" ]; then
-                echo "<details>" >> $GITHUB_STEP_SUMMARY
-                echo "<summary>🐳 Click to expand BuildKit SBOM (YAML format)</summary>" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
-                cat "$buildkit_file" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-                echo "</details>" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-              else
-                echo "No BuildKit SBOM data available." >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-              fi
-            done
-            
-            # Display Container Manifest Analysis
-            echo "### 🗂️ Container Layer Analysis (YAML)" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            for manifest_file in all-sboms/sbom-yaml/manifest.yaml; do
-              if [ -f "$manifest_file" ]; then
-                echo "<details>" >> $GITHUB_STEP_SUMMARY
-                echo "<summary>🗂️ Click to expand Container Manifest (YAML format)</summary>" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
-                cat "$manifest_file" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-                echo "</details>" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-              else
-                echo "No container manifest data available." >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-              fi
-            done
-            
-            # Display BuildKit Provenance
-            echo "### 🔍 BuildKit Provenance Analysis (YAML)" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            for provenance_file in all-sboms/sbom-yaml/buildkit-provenance.yaml; do
-              if [ -f "$provenance_file" ]; then
-                echo "<details>" >> $GITHUB_STEP_SUMMARY
-                echo "<summary>🔍 Click to expand BuildKit Provenance (YAML format)</summary>" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
-                cat "$provenance_file" >> $GITHUB_STEP_SUMMARY
-                echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-                echo "</details>" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-              else
-                echo "No BuildKit provenance data available." >> $GITHUB_STEP_SUMMARY
                 echo "" >> $GITHUB_STEP_SUMMARY
               fi
             done
@@ -621,24 +605,6 @@ jobs:
             fi
           done
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "### 🔒 Making Packages Public" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Container packages are **private by default**. To make them public:" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Option 1: Via GitHub Web Interface**" >> $GITHUB_STEP_SUMMARY
-          echo "1. Go to [Your Packages](https://github.com/${{ github.repository_owner }}?tab=packages)" >> $GITHUB_STEP_SUMMARY
-          echo "2. Click on a package name" >> $GITHUB_STEP_SUMMARY
-          echo "3. Go to Package settings ⚙️ → Change visibility → Public" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Option 2: Via GitHub CLI**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "gh api -X PATCH /user/packages/container/PACKAGE_NAME -f visibility=public" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Then you can pull images:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ghcr.io/${{ github.repository_owner }}/hello-world-go:latest" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "> 💡 **Pull images:** \`docker pull ghcr.io/${{ github.repository_owner }}/IMAGE_NAME:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
         fi
