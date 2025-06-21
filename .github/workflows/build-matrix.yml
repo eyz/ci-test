@@ -126,8 +126,6 @@ jobs:
     - name: Generate comprehensive SBOMs
       id: generate-sboms
       if: env.TEST_PASSED == 'true' && github.ref == 'refs/heads/main'
-      outputs:
-        cyclonedx_generated: ${{ steps.gen.outputs.cyclonedx_generated }}
       run: |
         echo "📋 Generating SBOMs with multiple tools..."
         
@@ -164,21 +162,19 @@ jobs:
             # Create minimal SBOM if none generated
             if [ ! -f "sbom-output/_manifest/spdx_2.2/manifest.spdx.json" ]; then
               mkdir -p sbom-output/_manifest/spdx_2.2
-              cat > sbom-output/_manifest/spdx_2.2/manifest.spdx.json << EOF
-        {
-          "spdxVersion": "SPDX-2.2",
-          "dataLicense": "CC0-1.0",
-          "SPDXID": "SPDXRef-DOCUMENT",
-          "name": "${{ matrix.containerName }}",
-          "documentNamespace": "https://github.com/${{ github.repository }}/${{ matrix.containerName }}/sha-${{ github.sha }}",
-          "creationInfo": {
-            "created": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "creators": ["Tool: Microsoft.Sbom.Tool"]
-          },
-          "packages": [],
-          "relationships": []
-        }
-EOF
+              echo '{
+                "spdxVersion": "SPDX-2.2",
+                "dataLicense": "CC0-1.0",
+                "SPDXID": "SPDXRef-DOCUMENT",
+                "name": "${{ matrix.containerName }}",
+                "documentNamespace": "https://github.com/${{ github.repository }}/${{ matrix.containerName }}/sha-${{ github.sha }}",
+                "creationInfo": {
+                  "created": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+                  "creators": ["Tool: Microsoft.Sbom.Tool"]
+                },
+                "packages": [],
+                "relationships": []
+              }' > sbom-output/_manifest/spdx_2.2/manifest.spdx.json
             fi
           }
         
@@ -282,7 +278,7 @@ EOF
         echo "� Creating SBOM summary..."
         
         # Create summary for artifacts
-        source_packages=$(jq -r '.packages | length' microsoft-sbom.spdx.json 2>/dev/null || echo "0")
+        source_packages=$(jq -r '.packages | length' source-sbom.spdx.json 2>/dev/null || echo "0")
         
         echo "SBOM Summary for ${{ matrix.containerName }}" > sbom-summary.txt
         echo "Source dependencies: $source_packages packages" >> sbom-summary.txt
@@ -308,9 +304,9 @@ EOF
           build_url="${{ steps.build-attestation.outputs.attestation-url }}"
         fi
         
-        if [[ "${{ steps.microsoft-sbom-attestation.outcome }}" == "success" ]]; then
+        if [[ "${{ steps.spdx-sbom-attestation.outcome }}" == "success" ]]; then
           microsoft_sbom_status="✅ Signed"
-          microsoft_sbom_url="${{ steps.microsoft-sbom-attestation.outputs.attestation-url }}"
+          microsoft_sbom_url="${{ steps.spdx-sbom-attestation.outputs.attestation-url }}"
         fi
         
         echo "${{ matrix.containerName }},${{ matrix.dockerfilePath }},${{ steps.build-push.outputs.digest }},$build_status,$microsoft_sbom_status,$buildkit_sbom_status,$build_url,$microsoft_sbom_url,$buildkit_sbom_url" > attestation-results/${{ matrix.containerName }}.csv
@@ -338,7 +334,7 @@ EOF
       with:
         name: sbom-files-${{ matrix.containerName }}
         path: |
-          microsoft-sbom.spdx.json
+          source-sbom.spdx.json
           sbom-summary.txt
         retention-days: 30
 
@@ -498,9 +494,9 @@ EOF
                   
                   # Count source code SBOM packages
                   source_count="0"
-                  microsoft_sbom_file="all-sboms/microsoft-sbom.spdx.json"
-                  if [ -f "$microsoft_sbom_file" ]; then
-                    source_count=$(cat "$microsoft_sbom_file" | jq -r '.packages | length' 2>/dev/null || echo "0")
+                  source_sbom_file="all-sboms/source-sbom.spdx.json"
+                  if [ -f "$source_sbom_file" ]; then
+                    source_count=$(cat "$source_sbom_file" | jq -r '.packages | length' 2>/dev/null || echo "0")
                   fi
                   
                   # Count container SBOM packages - Enhanced BuildKit features
