@@ -1,5 +1,5 @@
 # Use the official Rust image as the base image
-FROM rust:1.87.0-alpine3.22 AS build
+FROM rust:1.88.0-alpine3.22 AS build
 
 # Install musl development tools and target for static linking
 RUN apk add --no-cache musl-dev && \
