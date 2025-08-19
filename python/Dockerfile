@@ -1,5 +1,5 @@
 # Build stage
-FROM python:3.13.5-alpine3.22 AS build
+FROM python:3.13.7-alpine3.22 AS build
 
 # Set working directory
 WORKDIR /app
@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY python/main.py .
 
 # Final stage
-FROM python:3.13.5-alpine3.22 AS final
+FROM python:3.13.7-alpine3.22 AS final
 
 # Set working directory
 WORKDIR /app
