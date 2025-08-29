@@ -274,7 +274,7 @@ jobs:
     - name: Generate SPDX SBOM attestation
       id: spdx-sbom-attestation
       if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
-      uses: actions/attest-sbom@v2
+      uses: actions/attest-sbom@v3
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         subject-digest: ${{ steps.build-push.outputs.digest }}
@@ -288,7 +288,7 @@ jobs:
     - name: Generate BuildKit SBOM attestation
       id: buildkit-sbom-attestation
       if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
-      uses: actions/attest-sbom@v2
+      uses: actions/attest-sbom@v3
       with:
         subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.containerName }}
         subject-digest: ${{ steps.build-push.outputs.digest }}
