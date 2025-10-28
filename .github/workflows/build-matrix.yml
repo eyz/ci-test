@@ -347,7 +347,7 @@ jobs:
 
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: test-results-${{ matrix.containerName }}
         path: test-results/
@@ -355,7 +355,7 @@ jobs:
 
     - name: Upload attestation results
       if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: attestation-results-${{ matrix.containerName }}
         path: attestation-results/
@@ -363,7 +363,7 @@ jobs:
 
     - name: Upload SBOM artifacts
       if: steps.test-endpoint.outputs.test_passed == 'true' && github.ref == 'refs/heads/main'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: sbom-files-${{ matrix.containerName }}
         path: |
