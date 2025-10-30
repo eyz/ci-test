@@ -1,5 +1,5 @@
 # Build stage
-FROM node:24.2.0-alpine3.22 AS build
+FROM node:25.1.0-alpine3.22 AS build
 
 # Enable corepack for pnpm
 RUN corepack enable
@@ -17,7 +17,7 @@ RUN pnpm install --prod
 COPY node/server.js ./
 
 # Final stage
-FROM node:24.2.0-alpine3.22 AS final
+FROM node:25.1.0-alpine3.22 AS final
 
 # Enable corepack for pnpm
 RUN corepack enable
